@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import SmelterStats from "./tools/SmelterStats.tsx";
 import WhipStreamer from "./tools/WhipStreamer.tsx";
+import WhepPlayer from "./tools/WhepPlayer.tsx";
 
 const TOOLS = [
   { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard" },
@@ -8,6 +9,11 @@ const TOOLS = [
     id: "whip-streamer",
     name: "WHIP Streamer",
     description: "Stream screen or camera via WebRTC WHIP",
+  },
+  {
+    id: "whep-player",
+    name: "WHEP Player",
+    description: "Receive and play a stream via WebRTC WHEP",
   },
 ] as const;
 
@@ -29,6 +35,8 @@ function ToolPage({ id }: { id: ToolId }) {
       return <SmelterStats />;
     case "whip-streamer":
       return <WhipStreamer />;
+    case "whep-player":
+      return <WhepPlayer />;
   }
 }
 
