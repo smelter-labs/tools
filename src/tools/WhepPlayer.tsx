@@ -32,13 +32,9 @@ async function connectWhep(
   return { stream, pc };
 }
 
-export default function WhepPlayer() {
-  const [url, setUrl] = useState(
-    () => new URLSearchParams(window.location.search).get("whep_url") ?? "",
-  );
-  const [token, setToken] = useState(
-    () => new URLSearchParams(window.location.search).get("whep_token") ?? "",
-  );
+export default function WhepPlayer({ params }: { params: URLSearchParams }) {
+  const [url, setUrl] = useState(() => params.get("url") ?? "");
+  const [token, setToken] = useState(() => params.get("token") ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const connectionRef = useRef<{ stream: MediaStream; pc: RTCPeerConnection } | null>(null);

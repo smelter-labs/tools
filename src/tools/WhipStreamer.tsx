@@ -48,13 +48,9 @@ async function getMediaStream(source: SourceType): Promise<MediaStream> {
   }
 }
 
-export default function WhipStreamer() {
-  const [url, setUrl] = useState(
-    () => new URLSearchParams(window.location.search).get("whip_url") ?? "",
-  );
-  const [token, setToken] = useState(
-    () => new URLSearchParams(window.location.search).get("whip_token") ?? "",
-  );
+export default function WhipStreamer({ params }: { params: URLSearchParams }) {
+  const [url, setUrl] = useState(() => params.get("url") ?? "");
+  const [token, setToken] = useState(() => params.get("token") ?? "");
   const [status, setStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const connectionRef = useRef<{ stream: MediaStream; pc: RTCPeerConnection } | null>(null);

@@ -19,30 +19,42 @@ const TOOLS = [
 
 type ToolId = (typeof TOOLS)[number]["id"];
 
-function useHash(): string {
-  const [hash, setHash] = useState(window.location.hash.slice(1));
+interface HashRoute {
+  path: string;
+  params: URLSearchParams;
+}
+
+function parseHash(hash: string): HashRoute {
+  const raw = hash.slice(1); // remove #
+  const qIndex = raw.indexOf("?");
+  if (qIndex === -1) return { path: raw, params: new URLSearchParams() };
+  return { path: raw.slice(0, qIndex), params: new URLSearchParams(raw.slice(qIndex + 1)) };
+}
+
+function useHashRoute(): HashRoute {
+  const [route, setRoute] = useState(() => parseHash(window.location.hash));
   useEffect(() => {
-    const onHashChange = () => setHash(window.location.hash.slice(1));
+    const onHashChange = () => setRoute(parseHash(window.location.hash));
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
-  return hash;
+  return route;
 }
 
-function ToolPage({ id }: { id: ToolId }) {
+function ToolPage({ id, params }: { id: ToolId; params: URLSearchParams }) {
   switch (id) {
     case "smelter-stats":
       return <SmelterStats />;
     case "whip-streamer":
-      return <WhipStreamer />;
+      return <WhipStreamer params={params} />;
     case "whep-player":
-      return <WhepPlayer />;
+      return <WhepPlayer params={params} />;
   }
 }
 
 export default function App() {
-  const hash = useHash();
-  const activeTool = TOOLS.find((t) => t.id === hash);
+  const { path, params } = useHashRoute();
+  const activeTool = TOOLS.find((t) => t.id === path);
 
   if (activeTool) {
     return (
@@ -53,7 +65,7 @@ export default function App() {
           &larr; Back to tools
         </a>
         <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
-        <ToolPage id={activeTool.id} />
+        <ToolPage id={activeTool.id} params={params} />
       </div>
     );
   }
