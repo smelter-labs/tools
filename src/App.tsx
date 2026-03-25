@@ -44,7 +44,7 @@ function useHashRoute(): HashRoute {
 function ToolPage({ id, params }: { id: ToolId; params: URLSearchParams }) {
   switch (id) {
     case "smelter-stats":
-      return <SmelterStats />;
+      return <SmelterStats params={params} />;
     case "whip-streamer":
       return <WhipStreamer params={params} />;
     case "whep-player":
