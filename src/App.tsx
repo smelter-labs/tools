@@ -58,10 +58,11 @@ export default function App() {
 
   if (activeTool) {
     return (
-      <div
-        style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}
-      >
-        <a href="#" style={{ textDecoration: "none", color: "var(--text-muted)", fontSize: "0.9rem" }}>
+      <div style={{ margin: "2rem", fontFamily: "system-ui" }}>
+        <a
+          href="#"
+          style={{ textDecoration: "none", color: "var(--text-muted)", fontSize: "0.9rem" }}
+        >
           &larr; Back to tools
         </a>
         <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
@@ -71,7 +72,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}>
+    <div style={{ margin: "2rem", fontFamily: "system-ui" }}>
       <h1>Smelter Tools</h1>
       <div
         style={{

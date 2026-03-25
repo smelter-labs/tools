@@ -22,26 +22,36 @@
         --dropdown-hover: #271f42;
         --shadow: rgba(0, 0, 0, 0.5);
       }
-      * { box-sizing: border-box; }
+      * {
+        box-sizing: border-box;
+      }
       body {
         margin: 0;
         background: var(--bg);
         color: var(--text);
-        font-family: system-ui, -apple-system, sans-serif;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
       }
-      input, button {
+      input,
+      button {
         color: var(--text);
         background: var(--input-bg);
         border: 1px solid var(--input-border);
         border-radius: 4px;
       }
-      input::placeholder { color: var(--text-dim); }
+      input::placeholder {
+        color: var(--text-dim);
+      }
       button {
         background: var(--bg-surface);
         cursor: pointer;
         transition: background 0.15s;
       }
-      button:hover { background: var(--bg-hover); }
+      button:hover {
+        background: var(--bg-hover);
+      }
     </style>
   </head>
   <body>

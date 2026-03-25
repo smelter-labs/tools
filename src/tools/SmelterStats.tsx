@@ -18,9 +18,23 @@ interface TrackBitrate {
   bitrate_1_minute: number;
 }
 
+interface SlidingWindowBufferStats {
+  effective_buffer_avg_seconds: number;
+  effective_buffer_max_seconds: number;
+  effective_buffer_min_seconds: number;
+  input_buffer_avg_seconds: number;
+  input_buffer_max_seconds: number;
+  input_buffer_min_seconds: number;
+}
+
 interface RtpTrack extends TrackBitrate {
   packets_lost: number;
   packets_received: number;
+  last_10_seconds: SlidingWindowBufferStats;
+}
+
+interface HlsTrack extends TrackBitrate {
+  last_10_seconds: SlidingWindowBufferStats;
 }
 
 interface StatsReport {
@@ -30,7 +44,8 @@ interface StatsReport {
 
 type InputStatsReport =
   | { type: "rtp" | "whip" | "whep"; video_rtp: RtpTrack; audio_rtp: RtpTrack }
-  | { type: "hls" | "rtmp" | "mp4"; video: TrackBitrate; audio: TrackBitrate };
+  | { type: "hls"; video: HlsTrack; audio: HlsTrack }
+  | { type: "rtmp" | "mp4"; video: TrackBitrate; audio: TrackBitrate };
 
 type OutputStatsReport =
   | { type: "whep"; video: TrackBitrate; audio: TrackBitrate; connected_peers: number }
@@ -75,6 +90,21 @@ function extraInfo(r: InputStatsReport | OutputStatsReport): string[] {
   return parts;
 }
 
+function getInputBufferStats(
+  r: InputStatsReport,
+): { video: SlidingWindowBufferStats; audio: SlidingWindowBufferStats } | null {
+  switch (r.type) {
+    case "rtp":
+    case "whip":
+    case "whep":
+      return { video: r.video_rtp.last_10_seconds, audio: r.audio_rtp.last_10_seconds };
+    case "hls":
+      return { video: r.video.last_10_seconds, audio: r.audio.last_10_seconds };
+    default:
+      return null;
+  }
+}
+
 // ── Chart data ──────────────────────────────────────────────────────
 
 interface BitratePoint {
@@ -83,7 +113,15 @@ interface BitratePoint {
   audio: number;
 }
 
-const MAX_CHART_POINTS = 60;
+interface BufferPoint {
+  time: string;
+  video_input_buffer: number;
+  video_effective_buffer: number;
+  audio_input_buffer: number;
+  audio_effective_buffer: number;
+}
+
+const MAX_CHART_POINTS = 300;
 
 // ── Styles ──────────────────────────────────────────────────────────
 
@@ -123,6 +161,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
 
   // Accumulate bitrate_1_second history per input/output id
   const historyRef = useRef<Record<string, BitratePoint[]>>({});
+  const bufferHistoryRef = useRef<Record<string, BufferPoint[]>>({});
 
   const fetchStats = useCallback(async () => {
     if (!url) return;
@@ -144,6 +183,21 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
           ...prev.slice(-(MAX_CHART_POINTS - 1)),
           { time: now, video: tracks.video.bitrate_1_second, audio: tracks.audio.bitrate_1_second },
         ];
+
+        const bufferStats = getInputBufferStats(input);
+        if (bufferStats) {
+          const prevBuf = bufferHistoryRef.current[key] ?? [];
+          bufferHistoryRef.current[key] = [
+            ...prevBuf.slice(-(MAX_CHART_POINTS - 1)),
+            {
+              time: now,
+              video_input_buffer: bufferStats.video.input_buffer_avg_seconds,
+              video_effective_buffer: bufferStats.video.effective_buffer_avg_seconds,
+              audio_input_buffer: bufferStats.audio.input_buffer_avg_seconds,
+              audio_effective_buffer: bufferStats.audio.effective_buffer_avg_seconds,
+            },
+          ];
+        }
       }
 
       // Update history for outputs
@@ -174,6 +228,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
       return;
     }
     historyRef.current = {};
+    bufferHistoryRef.current = {};
     saveToHistory("stats:url", url);
     setRunning(true);
   }, [url]);
@@ -199,7 +254,12 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
       </div>
 
       {status && (
-        <p style={{ color: status.startsWith("Error") ? "var(--error)" : "var(--text-muted)", margin: "0 0 1rem" }}>
+        <p
+          style={{
+            color: status.startsWith("Error") ? "var(--error)" : "var(--text-muted)",
+            margin: "0 0 1rem",
+          }}
+        >
           {status}
         </p>
       )}
@@ -212,6 +272,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
               {Object.entries(report.inputs).map(([id, input]) => {
                 const tracks = getInputTracks(input);
                 const history = historyRef.current[`input:${id}`] ?? [];
+                const bufferHistory = bufferHistoryRef.current[`input:${id}`] ?? [];
                 const extra = extraInfo(input);
                 return (
                   <div key={`input:${id}`} style={cardStyle}>
@@ -233,6 +294,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                       ))}
                     </div>
                     <BitrateChart data={history} />
+                    <BufferChart data={bufferHistory} />
                   </div>
                 );
               })}
@@ -281,6 +343,98 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
   );
 }
 
+function BufferChart({ data }: { data: BufferPoint[] }) {
+  if (data.length === 0) return null;
+
+  // Convert to milliseconds for display
+  const chartData = data.map((d) => ({
+    time: d.time,
+    video_input_buffer: d.video_input_buffer * 1000,
+    video_effective_buffer: d.video_effective_buffer * 1000,
+    audio_input_buffer: d.audio_input_buffer * 1000,
+    audio_effective_buffer: d.audio_effective_buffer * 1000,
+  }));
+
+  return (
+    <>
+      <div
+        style={{
+          fontSize: "0.85rem",
+          fontWeight: 600,
+          margin: "0.75rem 0 0.25rem",
+          color: "var(--text-muted)",
+        }}
+      >
+        Buffer (avg over last 10s)
+      </div>
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+          <XAxis
+            dataKey="time"
+            tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+            interval="preserveStartEnd"
+            stroke="var(--border)"
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+            unit=" ms"
+            width={80}
+            stroke="var(--border)"
+          />
+          <Tooltip
+            formatter={(v: number) => `${v.toFixed(1)} ms`}
+            contentStyle={{
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--text)",
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="video_input_buffer"
+            name="Video Input Buffer"
+            stroke="#8884d8"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="video_effective_buffer"
+            name="Video Effective Buffer"
+            stroke="#8884d8"
+            strokeWidth={2}
+            strokeDasharray="5 5"
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="audio_input_buffer"
+            name="Audio Input Buffer"
+            stroke="#82ca9d"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="audio_effective_buffer"
+            name="Audio Effective Buffer"
+            stroke="#82ca9d"
+            strokeWidth={2}
+            strokeDasharray="5 5"
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </>
+  );
+}
+
 function BitrateChart({ data }: { data: BitratePoint[] }) {
   if (data.length === 0) return null;
 
@@ -295,9 +449,27 @@ function BitrateChart({ data }: { data: BitratePoint[] }) {
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={chartData}>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-        <XAxis dataKey="time" tick={{ fontSize: 11, fill: "var(--text-muted)" }} interval="preserveStartEnd" stroke="var(--border)" />
-        <YAxis tick={{ fontSize: 11, fill: "var(--text-muted)" }} unit=" kbps" width={80} stroke="var(--border)" />
-        <Tooltip formatter={(v: number) => `${v.toFixed(1)} kbps`} contentStyle={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }} />
+        <XAxis
+          dataKey="time"
+          tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+          interval="preserveStartEnd"
+          stroke="var(--border)"
+        />
+        <YAxis
+          tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+          unit=" kbps"
+          width={80}
+          stroke="var(--border)"
+        />
+        <Tooltip
+          formatter={(v: number) => `${v.toFixed(1)} kbps`}
+          contentStyle={{
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            color: "var(--text)",
+          }}
+        />
         <Line
           type="monotone"
           dataKey="video"

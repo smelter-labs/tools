@@ -58,7 +58,14 @@ export default function SuggestInput({
 
   return (
     <div ref={containerRef} style={{ flex: 1, minWidth: 200, position: "relative" }}>
-      <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "var(--text-muted)" }}>
+      <label
+        style={{
+          display: "block",
+          marginBottom: 4,
+          fontSize: "0.85rem",
+          color: "var(--text-muted)",
+        }}
+      >
         {label}
       </label>
       <input
