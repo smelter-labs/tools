@@ -1,67 +1,70 @@
-import { useState, useEffect, useCallback } from "react";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
+import { useState, useEffect } from "react";
+import SmelterStats from "./tools/SmelterStats.tsx";
 
-interface DataPoint {
-  time: string;
-  value: number;
+const TOOLS = [
+  { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard" },
+] as const;
+
+type ToolId = (typeof TOOLS)[number]["id"];
+
+function useHash(): string {
+  const [hash, setHash] = useState(window.location.hash.slice(1));
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash.slice(1));
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return hash;
 }
 
-function generatePoint(): DataPoint {
-  return {
-    time: new Date().toLocaleTimeString(),
-    value: Math.random() * 100,
-  };
+function ToolPage({ id }: { id: ToolId }) {
+  switch (id) {
+    case "smelter-stats":
+      return <SmelterStats />;
+  }
 }
-
-const MAX_POINTS = 30;
 
 export default function App() {
-  const [data, setData] = useState<DataPoint[]>(() =>
-    Array.from({ length: 10 }, generatePoint),
-  );
-  const [running, setRunning] = useState(true);
+  const hash = useHash();
+  const activeTool = TOOLS.find((t) => t.id === hash);
 
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => {
-      setData((prev) => [...prev.slice(-(MAX_POINTS - 1)), generatePoint()]);
-    }, 1000);
-    return () => clearInterval(id);
-  }, [running]);
-
-  const toggle = useCallback(() => setRunning((r) => !r), []);
+  if (activeTool) {
+    return (
+      <div style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}>
+        <a href="#" style={{ textDecoration: "none", color: "#666", fontSize: "0.9rem" }}>
+          &larr; Back to tools
+        </a>
+        <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
+        <ToolPage id={activeTool.id} />
+      </div>
+    );
+  }
 
   return (
-    <div style={{ maxWidth: 800, margin: "2rem auto", fontFamily: "system-ui" }}>
+    <div style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}>
       <h1>Smelter Tools</h1>
-      <p>Real-time chart demo — streaming random data every second.</p>
-      <button onClick={toggle} style={{ marginBottom: "1rem" }}>
-        {running ? "Pause" : "Resume"}
-      </button>
-      <ResponsiveContainer width="100%" height={400}>
-        <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="time" />
-          <YAxis domain={[0, 100]} />
-          <Tooltip />
-          <Line
-            type="monotone"
-            dataKey="value"
-            stroke="#8884d8"
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
+        {TOOLS.map((tool) => (
+          <a
+            key={tool.id}
+            href={`#${tool.id}`}
+            style={{
+              display: "block",
+              padding: "1.5rem",
+              border: "1px solid #e0e0e0",
+              borderRadius: 8,
+              textDecoration: "none",
+              color: "inherit",
+              transition: "box-shadow 0.15s",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1)")}
+            onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
+          >
+            <h2 style={{ margin: "0 0 0.5rem" }}>{tool.name}</h2>
+            <p style={{ margin: 0, color: "#666" }}>{tool.description}</p>
+          </a>
+        ))}
+      </div>
     </div>
   );
 }
