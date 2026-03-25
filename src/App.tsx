@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import SmelterStats from "./tools/SmelterStats.tsx";
+import WhipStreamer from "./tools/WhipStreamer.tsx";
 
 const TOOLS = [
   { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard" },
+  { id: "whip-streamer", name: "WHIP Streamer", description: "Stream screen or camera via WebRTC WHIP" },
 ] as const;
 
 type ToolId = (typeof TOOLS)[number]["id"];
@@ -21,6 +23,8 @@ function ToolPage({ id }: { id: ToolId }) {
   switch (id) {
     case "smelter-stats":
       return <SmelterStats />;
+    case "whip-streamer":
+      return <WhipStreamer />;
   }
 }
 
