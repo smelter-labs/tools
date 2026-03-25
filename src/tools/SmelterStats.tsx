@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSessionInput } from "../useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
 import {
   LineChart,
   Line,
@@ -113,7 +115,7 @@ const statRowStyle: React.CSSProperties = {
 // ── Component ───────────────────────────────────────────────────────
 
 export default function SmelterStats({ params }: { params: URLSearchParams }) {
-  const [url, setUrl] = useState(() => params.get("url") ?? "http://localhost:8081");
+  const [url, setUrl] = useSessionInput("stats:url", params, "url", "http://localhost:8081");
   const [status, setStatus] = useState<string | null>(null);
   const [report, setReport] = useState<StatsReport | null>(null);
   const [running, setRunning] = useState(false);
@@ -171,24 +173,20 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
       return;
     }
     historyRef.current = {};
+    saveToHistory("stats:url", url);
     setRunning(true);
   }, [url]);
 
   return (
     <>
       <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "#666" }}>
-            Smelter Instance URL
-          </label>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://localhost:8004"
-            style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-          />
-        </div>
+        <SuggestInput
+          historyKey="stats:url"
+          value={url}
+          onChange={setUrl}
+          placeholder="http://localhost:8004"
+          label="Smelter Instance URL"
+        />
         <div style={{ display: "flex", alignItems: "flex-end", gap: "0.5rem" }}>
           <button
             onClick={running ? () => setRunning(false) : connect}
@@ -220,10 +218,12 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                     <span style={badgeStyle}>{input.type}</span>
                     <div style={statRowStyle}>
                       <span>
-                        Video (1m avg): <strong>{formatBitrate(tracks.video.bitrate_1_minute)}</strong>
+                        Video (1m avg):{" "}
+                        <strong>{formatBitrate(tracks.video.bitrate_1_minute)}</strong>
                       </span>
                       <span>
-                        Audio (1m avg): <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
+                        Audio (1m avg):{" "}
+                        <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
                       </span>
                       {extra.map((e, i) => (
                         <span key={i} style={{ color: "#888" }}>
@@ -251,10 +251,12 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                     <span style={badgeStyle}>{output.type}</span>
                     <div style={statRowStyle}>
                       <span>
-                        Video (1m avg): <strong>{formatBitrate(tracks.video.bitrate_1_minute)}</strong>
+                        Video (1m avg):{" "}
+                        <strong>{formatBitrate(tracks.video.bitrate_1_minute)}</strong>
                       </span>
                       <span>
-                        Audio (1m avg): <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
+                        Audio (1m avg):{" "}
+                        <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
                       </span>
                       {extra.map((e, i) => (
                         <span key={i} style={{ color: "#888" }}>

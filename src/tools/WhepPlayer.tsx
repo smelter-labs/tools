@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useSessionInput } from "../useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
 import { createPeerConnection, negotiate } from "../webrtc.ts";
 
 async function connectWhep(
@@ -33,8 +35,8 @@ async function connectWhep(
 }
 
 export default function WhepPlayer({ params }: { params: URLSearchParams }) {
-  const [url, setUrl] = useState(() => params.get("url") ?? "");
-  const [token, setToken] = useState(() => params.get("token") ?? "");
+  const [url, setUrl] = useSessionInput("whep:url", params, "url");
+  const [token, setToken] = useSessionInput("whep:token", params, "token");
   const [status, setStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const connectionRef = useRef<{ stream: MediaStream; pc: RTCPeerConnection } | null>(null);
@@ -55,6 +57,8 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
       return;
     }
     cleanup();
+    saveToHistory("whep:url", url);
+    saveToHistory("whep:token", token);
     setStatus("Connecting...");
     try {
       const conn = await connectWhep(url, token);
@@ -71,30 +75,20 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
   return (
     <>
       <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "#666" }}>
-            WHEP Endpoint URL
-          </label>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://localhost:8080/whep/..."
-            style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-          />
-        </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "#666" }}>
-            Bearer Token (optional)
-          </label>
-          <input
-            type="text"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="token"
-            style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-          />
-        </div>
+        <SuggestInput
+          historyKey="whep:url"
+          value={url}
+          onChange={setUrl}
+          placeholder="http://localhost:8080/whep/..."
+          label="WHEP Endpoint URL"
+        />
+        <SuggestInput
+          historyKey="whep:token"
+          value={token}
+          onChange={setToken}
+          placeholder="token"
+          label="Bearer Token (optional)"
+        />
       </div>
 
       <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>

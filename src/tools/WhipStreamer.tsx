@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useSessionInput } from "../useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
 import { createPeerConnection, negotiate } from "../webrtc.ts";
 
 async function connectWhip(endpointUrl: string, bearerToken: string, stream: MediaStream) {
@@ -49,8 +51,8 @@ async function getMediaStream(source: SourceType): Promise<MediaStream> {
 }
 
 export default function WhipStreamer({ params }: { params: URLSearchParams }) {
-  const [url, setUrl] = useState(() => params.get("url") ?? "");
-  const [token, setToken] = useState(() => params.get("token") ?? "");
+  const [url, setUrl] = useSessionInput("whip:url", params, "url");
+  const [token, setToken] = useSessionInput("whip:token", params, "token");
   const [status, setStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const connectionRef = useRef<{ stream: MediaStream; pc: RTCPeerConnection } | null>(null);
@@ -72,6 +74,8 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         return;
       }
       cleanup();
+      saveToHistory("whip:url", url);
+      saveToHistory("whip:token", token);
       setStatus("Connecting...");
       try {
         const stream = await getMediaStream(source);
@@ -91,30 +95,20 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   return (
     <>
       <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "#666" }}>
-            WHIP Endpoint URL
-          </label>
-          <input
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://localhost:8080/whip/..."
-            style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-          />
-        </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "#666" }}>
-            Bearer Token (optional)
-          </label>
-          <input
-            type="text"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="token"
-            style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-          />
-        </div>
+        <SuggestInput
+          historyKey="whip:url"
+          value={url}
+          onChange={setUrl}
+          placeholder="http://localhost:8080/whip/..."
+          label="WHIP Endpoint URL"
+        />
+        <SuggestInput
+          historyKey="whip:token"
+          value={token}
+          onChange={setToken}
+          placeholder="token"
+          label="Bearer Token (optional)"
+        />
       </div>
 
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
