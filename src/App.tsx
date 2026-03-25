@@ -4,7 +4,11 @@ import WhipStreamer from "./tools/WhipStreamer.tsx";
 
 const TOOLS = [
   { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard" },
-  { id: "whip-streamer", name: "WHIP Streamer", description: "Stream screen or camera via WebRTC WHIP" },
+  {
+    id: "whip-streamer",
+    name: "WHIP Streamer",
+    description: "Stream screen or camera via WebRTC WHIP",
+  },
 ] as const;
 
 type ToolId = (typeof TOOLS)[number]["id"];
@@ -34,7 +38,9 @@ export default function App() {
 
   if (activeTool) {
     return (
-      <div style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}>
+      <div
+        style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}
+      >
         <a href="#" style={{ textDecoration: "none", color: "#666", fontSize: "0.9rem" }}>
           &larr; Back to tools
         </a>
@@ -47,7 +53,13 @@ export default function App() {
   return (
     <div style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}>
       <h1>Smelter Tools</h1>
-      <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
+      <div
+        style={{
+          display: "grid",
+          gap: "1rem",
+          gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+        }}
+      >
         {TOOLS.map((tool) => (
           <a
             key={tool.id}

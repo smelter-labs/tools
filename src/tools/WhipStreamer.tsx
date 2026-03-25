@@ -24,9 +24,7 @@ async function postSdpOffer(endpoint: string, sdpOffer: string, token: string) {
 
   if (response.status === 201) {
     const locationHeader = response.headers.get("Location");
-    const location = locationHeader
-      ? new URL(locationHeader, endpoint).toString()
-      : endpoint;
+    const location = locationHeader ? new URL(locationHeader, endpoint).toString() : endpoint;
     return { sdp: await response.text(), location };
   }
   throw new Error(await response.text());
@@ -73,9 +71,9 @@ async function connect(endpointUrl: string, bearerToken: string, stream: MediaSt
 type SourceType = "screen" | "screen-no-audio" | "camera" | "camera-no-audio";
 
 const SOURCE_LABELS: Record<SourceType, string> = {
-  "screen": "Screen share (audio + video)",
+  screen: "Screen share (audio + video)",
   "screen-no-audio": "Screen share (video only)",
-  "camera": "Camera (audio + video)",
+  camera: "Camera (audio + video)",
   "camera-no-audio": "Camera (video only)",
 };
 
@@ -93,8 +91,12 @@ async function getMediaStream(source: SourceType): Promise<MediaStream> {
 }
 
 export default function WhipStreamer() {
-  const [url, setUrl] = useState(() => new URLSearchParams(window.location.search).get("whip_url") ?? "");
-  const [token, setToken] = useState(() => new URLSearchParams(window.location.search).get("whip_token") ?? "");
+  const [url, setUrl] = useState(
+    () => new URLSearchParams(window.location.search).get("whip_url") ?? "",
+  );
+  const [token, setToken] = useState(
+    () => new URLSearchParams(window.location.search).get("whip_token") ?? "",
+  );
   const [status, setStatus] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const connectionRef = useRef<{ stream: MediaStream; pc: RTCPeerConnection } | null>(null);
@@ -172,8 +174,17 @@ export default function WhipStreamer() {
           </button>
         ))}
         <button
-          onClick={() => { cleanup(); setStatus(null); if (videoRef.current) videoRef.current.srcObject = null; }}
-          style={{ padding: "0.6rem 1rem", fontSize: "0.9rem", cursor: "pointer", marginLeft: "auto" }}
+          onClick={() => {
+            cleanup();
+            setStatus(null);
+            if (videoRef.current) videoRef.current.srcObject = null;
+          }}
+          style={{
+            padding: "0.6rem 1rem",
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            marginLeft: "auto",
+          }}
         >
           Stop
         </button>
@@ -185,7 +196,17 @@ export default function WhipStreamer() {
         </p>
       )}
 
-      <div style={{ background: "#000", borderRadius: 8, overflow: "hidden", aspectRatio: "16/9", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div
+        style={{
+          background: "#000",
+          borderRadius: 8,
+          overflow: "hidden",
+          aspectRatio: "16/9",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         <video
           ref={videoRef}
           autoPlay

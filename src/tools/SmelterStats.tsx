@@ -24,9 +24,7 @@ function generatePoint(): DataPoint {
 const MAX_POINTS = 30;
 
 export default function SmelterStats() {
-  const [data, setData] = useState<DataPoint[]>(() =>
-    Array.from({ length: 10 }, generatePoint),
-  );
+  const [data, setData] = useState<DataPoint[]>(() => Array.from({ length: 10 }, generatePoint));
   const [running, setRunning] = useState(true);
 
   useEffect(() => {
