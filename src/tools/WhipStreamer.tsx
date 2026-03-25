@@ -139,7 +139,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
       </div>
 
       {status && (
-        <p style={{ color: status.startsWith("Error") ? "#d32f2f" : "#666", margin: "0 0 1rem" }}>
+        <p style={{ color: status.startsWith("Error") ? "var(--error)" : "var(--text-muted)", margin: "0 0 1rem" }}>
           {status}
         </p>
       )}

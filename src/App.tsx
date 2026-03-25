@@ -61,7 +61,7 @@ export default function App() {
       <div
         style={{ maxWidth: 900, margin: "2rem auto", fontFamily: "system-ui", padding: "0 1rem" }}
       >
-        <a href="#" style={{ textDecoration: "none", color: "#666", fontSize: "0.9rem" }}>
+        <a href="#" style={{ textDecoration: "none", color: "var(--text-muted)", fontSize: "0.9rem" }}>
           &larr; Back to tools
         </a>
         <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
@@ -87,17 +87,17 @@ export default function App() {
             style={{
               display: "block",
               padding: "1.5rem",
-              border: "1px solid #e0e0e0",
+              border: "1px solid var(--border)",
               borderRadius: 8,
               textDecoration: "none",
               color: "inherit",
               transition: "box-shadow 0.15s",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1)")}
+            onMouseEnter={(e) => (e.currentTarget.style.boxShadow = "0 2px 12px var(--shadow)")}
             onMouseLeave={(e) => (e.currentTarget.style.boxShadow = "none")}
           >
             <h2 style={{ margin: "0 0 0.5rem" }}>{tool.name}</h2>
-            <p style={{ margin: 0, color: "#666" }}>{tool.description}</p>
+            <p style={{ margin: 0, color: "var(--text-muted)" }}>{tool.description}</p>
           </a>
         ))}
       </div>

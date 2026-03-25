@@ -58,7 +58,7 @@ export default function SuggestInput({
 
   return (
     <div ref={containerRef} style={{ flex: 1, minWidth: 200, position: "relative" }}>
-      <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "#666" }}>
+      <label style={{ display: "block", marginBottom: 4, fontSize: "0.85rem", color: "var(--text-muted)" }}>
         {label}
       </label>
       <input
@@ -79,10 +79,10 @@ export default function SuggestInput({
             margin: 0,
             padding: 0,
             listStyle: "none",
-            background: "#fff",
-            border: "1px solid #ccc",
+            background: "var(--dropdown-bg)",
+            border: "1px solid var(--border)",
             borderRadius: 4,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
+            boxShadow: "0 4px 12px var(--shadow)",
             zIndex: 10,
             maxHeight: 200,
             overflowY: "auto",
@@ -103,7 +103,7 @@ export default function SuggestInput({
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#f0f0f0")}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--dropdown-hover)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
               {s}

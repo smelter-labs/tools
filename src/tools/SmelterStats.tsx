@@ -88,17 +88,18 @@ const MAX_CHART_POINTS = 60;
 // ── Styles ──────────────────────────────────────────────────────────
 
 const cardStyle: React.CSSProperties = {
-  border: "1px solid #e0e0e0",
+  border: "1px solid var(--border)",
   borderRadius: 8,
   padding: "1rem",
   marginBottom: "1rem",
+  background: "var(--bg-surface)",
 };
 
 const badgeStyle: React.CSSProperties = {
   display: "inline-block",
   padding: "2px 8px",
   borderRadius: 4,
-  background: "#eee",
+  background: "var(--badge-bg)",
   fontSize: "0.8rem",
   fontWeight: 600,
   marginLeft: 8,
@@ -198,7 +199,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
       </div>
 
       {status && (
-        <p style={{ color: status.startsWith("Error") ? "#d32f2f" : "#666", margin: "0 0 1rem" }}>
+        <p style={{ color: status.startsWith("Error") ? "var(--error)" : "var(--text-muted)", margin: "0 0 1rem" }}>
           {status}
         </p>
       )}
@@ -226,7 +227,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                         <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
                       </span>
                       {extra.map((e, i) => (
-                        <span key={i} style={{ color: "#888" }}>
+                        <span key={i} style={{ color: "var(--text-muted)" }}>
                           {e}
                         </span>
                       ))}
@@ -259,7 +260,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                         <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
                       </span>
                       {extra.map((e, i) => (
-                        <span key={i} style={{ color: "#888" }}>
+                        <span key={i} style={{ color: "var(--text-muted)" }}>
                           {e}
                         </span>
                       ))}
@@ -272,7 +273,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
           )}
 
           {Object.keys(report.inputs).length === 0 && Object.keys(report.outputs).length === 0 && (
-            <p style={{ color: "#888" }}>No inputs or outputs registered.</p>
+            <p style={{ color: "var(--text-muted)" }}>No inputs or outputs registered.</p>
           )}
         </>
       )}
@@ -293,10 +294,10 @@ function BitrateChart({ data }: { data: BitratePoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" />
-        <XAxis dataKey="time" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-        <YAxis tick={{ fontSize: 11 }} unit=" kbps" width={80} />
-        <Tooltip formatter={(v: number) => `${v.toFixed(1)} kbps`} />
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+        <XAxis dataKey="time" tick={{ fontSize: 11, fill: "var(--text-muted)" }} interval="preserveStartEnd" stroke="var(--border)" />
+        <YAxis tick={{ fontSize: 11, fill: "var(--text-muted)" }} unit=" kbps" width={80} stroke="var(--border)" />
+        <Tooltip formatter={(v: number) => `${v.toFixed(1)} kbps`} contentStyle={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text)" }} />
         <Line
           type="monotone"
           dataKey="video"

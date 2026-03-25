@@ -4,6 +4,45 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Smelter Tools</title>
+    <style>
+      :root {
+        --bg: #161127;
+        --bg-surface: #1e1835;
+        --bg-hover: #271f42;
+        --border: #332a52;
+        --text: #fcf5f5;
+        --text-muted: #9e95b0;
+        --text-dim: #6e6484;
+        --accent: #f24664;
+        --error: #f24664;
+        --badge-bg: #332a52;
+        --input-bg: #0e0b1c;
+        --input-border: #332a52;
+        --dropdown-bg: #1e1835;
+        --dropdown-hover: #271f42;
+        --shadow: rgba(0, 0, 0, 0.5);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      input, button {
+        color: var(--text);
+        background: var(--input-bg);
+        border: 1px solid var(--input-border);
+        border-radius: 4px;
+      }
+      input::placeholder { color: var(--text-dim); }
+      button {
+        background: var(--bg-surface);
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      button:hover { background: var(--bg-hover); }
+    </style>
   </head>
   <body>
     <div id="root"></div>
