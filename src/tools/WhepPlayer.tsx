@@ -74,7 +74,15 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
 
   return (
     <>
-      <div style={{ display: "flex", gap: "1rem", marginBottom: "1rem", flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "1rem",
+          marginBottom: "1rem",
+          flexWrap: "wrap",
+          flexShrink: 0,
+        }}
+      >
         <SuggestInput
           historyKey="whep:url"
           value={url}
@@ -91,7 +99,7 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
         />
       </div>
 
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", flexShrink: 0 }}>
         <button
           onClick={connect}
           style={{ padding: "0.6rem 1rem", fontSize: "0.9rem", cursor: "pointer" }}
@@ -123,10 +131,8 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
 
       <div
         style={{
-          background: "#000",
-          borderRadius: 8,
-          overflow: "hidden",
-          aspectRatio: "16/9",
+          flex: 1,
+          minHeight: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -137,7 +143,7 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
           autoPlay
           playsInline
           controls
-          style={{ width: "100%", height: "100%" }}
+          style={{ maxWidth: "100%", maxHeight: "100%", width: "100%", height: "100%" }}
         />
       </div>
     </>

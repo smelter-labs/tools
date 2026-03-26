@@ -58,15 +58,29 @@ export default function App() {
 
   if (activeTool) {
     return (
-      <div style={{ margin: "2rem", fontFamily: "system-ui" }}>
-        <a
-          href="#"
-          style={{ textDecoration: "none", color: "var(--text-muted)", fontSize: "0.9rem" }}
-        >
-          &larr; Back to tools
-        </a>
-        <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
-        <ToolPage id={activeTool.id} params={params} />
+      <div
+        style={{
+          padding: "1rem 2rem",
+          fontFamily: "system-ui",
+          height: "100dvh",
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ flexShrink: 0 }}>
+          <a
+            href="#"
+            style={{ textDecoration: "none", color: "var(--text-muted)", fontSize: "0.9rem" }}
+          >
+            &larr; Back to tools
+          </a>
+          <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <ToolPage id={activeTool.id} params={params} />
+        </div>
       </div>
     );
   }
