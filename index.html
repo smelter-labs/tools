@@ -52,6 +52,24 @@
       button:hover {
         background: var(--bg-hover);
       }
+      /* Scrollbar styling */
+      ::-webkit-scrollbar {
+        width: 6px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--text-dim);
+      }
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) var(--bg);
+      }
     </style>
   </head>
   <body>

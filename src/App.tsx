@@ -4,16 +4,18 @@ import WhipStreamer from "./tools/WhipStreamer.tsx";
 import WhepPlayer from "./tools/WhepPlayer.tsx";
 
 const TOOLS = [
-  { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard" },
+  { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard", scrollable: true },
   {
     id: "whip-streamer",
     name: "WHIP Streamer",
     description: "Stream screen or camera via WebRTC WHIP",
+    scrollable: false,
   },
   {
     id: "whep-player",
     name: "WHEP Player",
     description: "Receive and play a stream via WebRTC WHEP",
+    scrollable: false,
   },
 ] as const;
 
@@ -60,13 +62,13 @@ export default function App() {
     return (
       <div
         style={{
-          padding: "1rem 2rem",
           fontFamily: "system-ui",
-          height: "100dvh",
+          height: activeTool.scrollable ? undefined : "100dvh",
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "column",
-          overflow: "hidden",
+          overflow: activeTool.scrollable ? undefined : "hidden",
+          padding: "1rem 2rem",
         }}
       >
         <div style={{ flexShrink: 0 }}>
