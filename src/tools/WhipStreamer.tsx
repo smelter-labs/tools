@@ -81,6 +81,13 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         const stream = await getMediaStream(source);
         const conn = await connectWhip(url, token, stream);
         connectionRef.current = conn;
+        conn.pc.addEventListener("connectionstatechange", () => {
+          if (conn.pc.connectionState === "failed" || conn.pc.connectionState === "disconnected") {
+            cleanup();
+            if (videoRef.current) videoRef.current.srcObject = null;
+            setStatus("Connection lost");
+          }
+        });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
