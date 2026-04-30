@@ -5,6 +5,8 @@ import { createPeerConnection, negotiate } from "../webrtc.ts";
 
 const NONE = "none";
 const SCREEN = "screen";
+const CAMERA = "camera";
+const MICROPHONE = "microphone";
 
 async function getVideoTrack(source: string): Promise<MediaStreamTrack | null> {
   if (source === NONE) return null;
@@ -12,9 +14,9 @@ async function getVideoTrack(source: string): Promise<MediaStreamTrack | null> {
     const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
     return s.getVideoTracks()[0] ?? null;
   }
-  const s = await navigator.mediaDevices.getUserMedia({
-    video: { deviceId: { exact: source } },
-  });
+  const constraint: MediaTrackConstraints =
+    source === CAMERA ? {} : { deviceId: { exact: source } };
+  const s = await navigator.mediaDevices.getUserMedia({ video: constraint });
   return s.getVideoTracks()[0] ?? null;
 }
 
@@ -25,9 +27,9 @@ async function getAudioTrack(source: string): Promise<MediaStreamTrack | null> {
     s.getVideoTracks().forEach((t) => t.stop());
     return s.getAudioTracks()[0] ?? null;
   }
-  const s = await navigator.mediaDevices.getUserMedia({
-    audio: { deviceId: { exact: source } },
-  });
+  const constraint: MediaTrackConstraints =
+    source === MICROPHONE ? {} : { deviceId: { exact: source } };
+  const s = await navigator.mediaDevices.getUserMedia({ audio: constraint });
   return s.getAudioTracks()[0] ?? null;
 }
 
@@ -83,21 +85,21 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     return () => navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
   }, [refreshDevices]);
 
+  const namedVideoDevices = videoDevices.filter((d) => d.deviceId && d.label);
+  const namedAudioDevices = audioDevices.filter((d) => d.deviceId && d.label);
   const videoOptions = [
     { value: NONE, label: "None" },
     { value: SCREEN, label: "Screen share" },
-    ...videoDevices.map((d, i) => ({
-      value: d.deviceId,
-      label: d.label || `Camera ${i + 1}`,
-    })),
+    ...(namedVideoDevices.length > 0
+      ? namedVideoDevices.map((d) => ({ value: d.deviceId, label: d.label }))
+      : [{ value: CAMERA, label: "Camera" }]),
   ];
   const audioOptions = [
     { value: NONE, label: "None" },
     { value: SCREEN, label: "Screen audio" },
-    ...audioDevices.map((d, i) => ({
-      value: d.deviceId,
-      label: d.label || `Microphone ${i + 1}`,
-    })),
+    ...(namedAudioDevices.length > 0
+      ? namedAudioDevices.map((d) => ({ value: d.deviceId, label: d.label }))
+      : [{ value: MICROPHONE, label: "Microphone" }]),
   ];
 
   const updatePreview = useCallback(() => {
@@ -148,6 +150,14 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     }
     currentVideoTrackRef.current = tracks.video;
     currentAudioTrackRef.current = tracks.audio;
+    if (videoSource === CAMERA && tracks.video) {
+      const id = tracks.video.getSettings().deviceId;
+      if (id) setVideoSource(id);
+    }
+    if (audioSource === MICROPHONE && tracks.audio) {
+      const id = tracks.audio.getSettings().deviceId;
+      if (id) setAudioSource(id);
+    }
     refreshDevices();
 
     setStatus("Connecting...");
@@ -199,6 +209,10 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         currentVideoTrackRef.current?.stop();
         currentVideoTrackRef.current = newTrack;
         await videoSenderRef.current.replaceTrack(newTrack);
+        if (newSource === CAMERA && newTrack) {
+          const id = newTrack.getSettings().deviceId;
+          if (id) setVideoSource(id);
+        }
         updatePreview();
         refreshDevices();
         setStatus("Streaming");
@@ -219,6 +233,10 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         currentAudioTrackRef.current?.stop();
         currentAudioTrackRef.current = newTrack;
         await audioSenderRef.current.replaceTrack(newTrack);
+        if (newSource === MICROPHONE && newTrack) {
+          const id = newTrack.getSettings().deviceId;
+          if (id) setAudioSource(id);
+        }
         updatePreview();
         refreshDevices();
         setStatus("Streaming");
