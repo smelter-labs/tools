@@ -3,47 +3,39 @@ import { useSessionInput } from "../useSessionInput.ts";
 import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
 import { createPeerConnection, negotiate } from "../webrtc.ts";
 
-type VideoSource = "none" | "camera" | "screen";
-type AudioSource = "none" | "microphone" | "screen";
+const NONE = "none";
+const SCREEN = "screen";
 
-const VIDEO_SOURCE_OPTIONS: { value: VideoSource; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "camera", label: "Camera" },
-  { value: "screen", label: "Screen share" },
-];
-
-const AUDIO_SOURCE_OPTIONS: { value: AudioSource; label: string }[] = [
-  { value: "none", label: "None" },
-  { value: "microphone", label: "Microphone" },
-  { value: "screen", label: "Screen audio" },
-];
-
-async function getVideoTrack(source: VideoSource): Promise<MediaStreamTrack | null> {
-  if (source === "none") return null;
-  if (source === "camera") {
-    const s = await navigator.mediaDevices.getUserMedia({ video: true });
+async function getVideoTrack(source: string): Promise<MediaStreamTrack | null> {
+  if (source === NONE) return null;
+  if (source === SCREEN) {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
     return s.getVideoTracks()[0] ?? null;
   }
-  const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+  const s = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: { exact: source } },
+  });
   return s.getVideoTracks()[0] ?? null;
 }
 
-async function getAudioTrack(source: AudioSource): Promise<MediaStreamTrack | null> {
-  if (source === "none") return null;
-  if (source === "microphone") {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+async function getAudioTrack(source: string): Promise<MediaStreamTrack | null> {
+  if (source === NONE) return null;
+  if (source === SCREEN) {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    s.getVideoTracks().forEach((t) => t.stop());
     return s.getAudioTracks()[0] ?? null;
   }
-  const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-  s.getVideoTracks().forEach((t) => t.stop());
+  const s = await navigator.mediaDevices.getUserMedia({
+    audio: { deviceId: { exact: source } },
+  });
   return s.getAudioTracks()[0] ?? null;
 }
 
 async function acquireInitialTracks(
-  videoSource: VideoSource,
-  audioSource: AudioSource,
+  videoSource: string,
+  audioSource: string,
 ): Promise<{ video: MediaStreamTrack | null; audio: MediaStreamTrack | null }> {
-  if (videoSource === "screen" && audioSource === "screen") {
+  if (videoSource === SCREEN && audioSource === SCREEN) {
     const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     return {
       video: s.getVideoTracks()[0] ?? null,
@@ -60,8 +52,10 @@ async function acquireInitialTracks(
 export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   const [url, setUrl] = useSessionInput("whip:url", params, "url");
   const [token, setToken] = useSessionInput("whip:token", params, "token");
-  const [videoSource, setVideoSource] = useState<VideoSource>("screen");
-  const [audioSource, setAudioSource] = useState<AudioSource>("none");
+  const [videoSource, setVideoSource] = useState<string>(SCREEN);
+  const [audioSource, setAudioSource] = useState<string>(NONE);
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -71,6 +65,40 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   const audioSenderRef = useRef<RTCRtpSender | null>(null);
   const currentVideoTrackRef = useRef<MediaStreamTrack | null>(null);
   const currentAudioTrackRef = useRef<MediaStreamTrack | null>(null);
+
+  const refreshDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setVideoDevices(devices.filter((d) => d.kind === "videoinput"));
+      setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    refreshDevices();
+    navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
+  }, [refreshDevices]);
+
+  const videoOptions = [
+    { value: NONE, label: "None" },
+    { value: SCREEN, label: "Screen share" },
+    ...videoDevices.map((d, i) => ({
+      value: d.deviceId,
+      label: d.label || `Camera ${i + 1}`,
+    })),
+  ];
+  const audioOptions = [
+    { value: NONE, label: "None" },
+    { value: SCREEN, label: "Screen audio" },
+    ...audioDevices.map((d, i) => ({
+      value: d.deviceId,
+      label: d.label || `Microphone ${i + 1}`,
+    })),
+  ];
 
   const updatePreview = useCallback(() => {
     if (!videoRef.current) return;
@@ -120,6 +148,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     }
     currentVideoTrackRef.current = tracks.video;
     currentAudioTrackRef.current = tracks.audio;
+    refreshDevices();
 
     setStatus("Connecting...");
     try {
@@ -158,10 +187,10 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
       cleanup();
       setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [url, token, videoSource, audioSource, cleanup, updatePreview]);
+  }, [url, token, videoSource, audioSource, cleanup, updatePreview, refreshDevices]);
 
   const handleVideoSourceChange = useCallback(
-    async (newSource: VideoSource) => {
+    async (newSource: string) => {
       setVideoSource(newSource);
       if (!pcRef.current || !videoSenderRef.current) return;
       setStatus("Switching video source...");
@@ -171,16 +200,17 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         currentVideoTrackRef.current = newTrack;
         await videoSenderRef.current.replaceTrack(newTrack);
         updatePreview();
+        refreshDevices();
         setStatus("Streaming");
       } catch (err) {
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [updatePreview],
+    [updatePreview, refreshDevices],
   );
 
   const handleAudioSourceChange = useCallback(
-    async (newSource: AudioSource) => {
+    async (newSource: string) => {
       setAudioSource(newSource);
       if (!pcRef.current || !audioSenderRef.current) return;
       setStatus("Switching audio source...");
@@ -190,12 +220,13 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         currentAudioTrackRef.current = newTrack;
         await audioSenderRef.current.replaceTrack(newTrack);
         updatePreview();
+        refreshDevices();
         setStatus("Streaming");
       } catch (err) {
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [updatePreview],
+    [updatePreview, refreshDevices],
   );
 
   return (
@@ -238,13 +269,13 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         <SourceSelect
           label="Video source"
           value={videoSource}
-          options={VIDEO_SOURCE_OPTIONS}
+          options={videoOptions}
           onChange={handleVideoSourceChange}
         />
         <SourceSelect
           label="Audio source"
           value={audioSource}
-          options={AUDIO_SOURCE_OPTIONS}
+          options={audioOptions}
           onChange={handleAudioSourceChange}
         />
       </div>
