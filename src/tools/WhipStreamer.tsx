@@ -680,7 +680,7 @@ function OptionGroup({ label, children }: { label: string; children: ReactNode }
         display: "flex",
         flexWrap: "wrap",
         gap: "1rem",
-        alignItems: "flex-end",
+        alignItems: "flex-start",
       }}
     >
       <legend
