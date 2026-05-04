@@ -37,6 +37,14 @@ const VIDEO_BITRATES: Record<string, { label: string; bps?: number }> = {
   "500": { label: "500 kbps", bps: 500_000 },
 };
 
+const DEGRADATION_PREFERENCES: Record<string, { label: string; value?: RTCDegradationPreference }> =
+  {
+    default: { label: "Default" },
+    balanced: { label: "Balanced", value: "balanced" },
+    "maintain-framerate": { label: "Maintain framerate", value: "maintain-framerate" },
+    "maintain-resolution": { label: "Maintain resolution", value: "maintain-resolution" },
+  };
+
 const AUDIO_BITRATES: Record<string, { label: string; bps?: number }> = {
   auto: { label: "Auto" },
   "256": { label: "256 kbps", bps: 256_000 },
@@ -90,21 +98,52 @@ async function applyMaxBitrate(sender: RTCRtpSender, bps: number | undefined) {
   }
 }
 
+async function applyDegradationPreference(
+  sender: RTCRtpSender,
+  preference: RTCDegradationPreference | undefined,
+) {
+  const params = sender.getParameters();
+  params.degradationPreference = preference;
+  try {
+    await sender.setParameters(params);
+  } catch {
+    // ignore — not supported in all browsers
+  }
+}
+
 function selectOptions<T extends { label: string }>(
   rec: Record<string, T>,
 ): { value: string; label: string }[] {
   return Object.entries(rec).map(([value, { label }]) => ({ value, label }));
 }
 
-async function getAudioTrack(source: string): Promise<MediaStreamTrack | null> {
+type AudioProcessing = {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+};
+
+function audioConstraints(processing: AudioProcessing): MediaTrackConstraints {
+  return {
+    echoCancellation: processing.echoCancellation,
+    noiseSuppression: processing.noiseSuppression,
+    autoGainControl: processing.autoGainControl,
+  };
+}
+
+async function getAudioTrack(
+  source: string,
+  processing: AudioProcessing,
+): Promise<MediaStreamTrack | null> {
   if (source === NONE) return null;
   if (source === SCREEN) {
     const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     s.getVideoTracks().forEach((t) => t.stop());
     return s.getAudioTracks()[0] ?? null;
   }
+  const proc = audioConstraints(processing);
   const constraint: MediaTrackConstraints =
-    source === MICROPHONE ? {} : { deviceId: { exact: source } };
+    source === MICROPHONE ? { ...proc } : { deviceId: { exact: source }, ...proc };
   const s = await navigator.mediaDevices.getUserMedia({ audio: constraint });
   return s.getAudioTracks()[0] ?? null;
 }
@@ -114,6 +153,7 @@ async function acquireInitialTracks(
   audioSource: string,
   resolution: string,
   framerate: string,
+  audioProcessing: AudioProcessing,
 ): Promise<{ video: MediaStreamTrack | null; audio: MediaStreamTrack | null }> {
   if (videoSource === SCREEN && audioSource === SCREEN) {
     const s = await navigator.mediaDevices.getDisplayMedia({
@@ -127,7 +167,7 @@ async function acquireInitialTracks(
   }
   const [video, audio] = await Promise.all([
     getVideoTrack(videoSource, resolution, framerate),
-    getAudioTrack(audioSource),
+    getAudioTrack(audioSource, audioProcessing),
   ]);
   return { video, audio };
 }
@@ -141,6 +181,12 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   const [framerate, setFramerate] = useState<string>("auto");
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
+  const [degradationPreference, setDegradationPreference] = useState<string>("default");
+  const [audioProcessing, setAudioProcessing] = useState<AudioProcessing>({
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  });
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -228,7 +274,13 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
 
     let tracks: { video: MediaStreamTrack | null; audio: MediaStreamTrack | null };
     try {
-      tracks = await acquireInitialTracks(videoSource, audioSource, resolution, framerate);
+      tracks = await acquireInitialTracks(
+        videoSource,
+        audioSource,
+        resolution,
+        framerate,
+        audioProcessing,
+      );
     } catch (err) {
       setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       return;
@@ -277,6 +329,10 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
 
       await applyMaxBitrate(videoTransceiver.sender, VIDEO_BITRATES[videoBitrate]?.bps);
       await applyMaxBitrate(audioTransceiver.sender, AUDIO_BITRATES[audioBitrate]?.bps);
+      await applyDegradationPreference(
+        videoTransceiver.sender,
+        DEGRADATION_PREFERENCES[degradationPreference]?.value,
+      );
 
       updatePreview();
       setStreaming(true);
@@ -294,6 +350,8 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     framerate,
     videoBitrate,
     audioBitrate,
+    degradationPreference,
+    audioProcessing,
     cleanup,
     updatePreview,
     refreshDevices,
@@ -381,7 +439,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
       if (!pcRef.current || !audioSenderRef.current) return;
       setStatus("Switching audio source...");
       try {
-        const newTrack = await getAudioTrack(newSource);
+        const newTrack = await getAudioTrack(newSource, audioProcessing);
         currentAudioTrackRef.current?.stop();
         currentAudioTrackRef.current = newTrack;
         await audioSenderRef.current.replaceTrack(newTrack);
@@ -396,7 +454,44 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [updatePreview, refreshDevices],
+    [audioProcessing, updatePreview, refreshDevices],
+  );
+
+  const handleDegradationPreferenceChange = useCallback(async (newPref: string) => {
+    setDegradationPreference(newPref);
+    if (videoSenderRef.current) {
+      await applyDegradationPreference(
+        videoSenderRef.current,
+        DEGRADATION_PREFERENCES[newPref]?.value,
+      );
+    }
+  }, []);
+
+  const handleAudioProcessingChange = useCallback(
+    async (key: keyof AudioProcessing, value: boolean) => {
+      const next = { ...audioProcessing, [key]: value };
+      setAudioProcessing(next);
+      if (!pcRef.current || !audioSenderRef.current || audioSource === NONE) return;
+      const track = currentAudioTrackRef.current;
+      if (!track) return;
+      try {
+        await track.applyConstraints(audioConstraints(next));
+      } catch {
+        // Some sources (e.g. screen audio) ignore these — re-acquire as a fallback.
+        try {
+          setStatus("Updating audio processing...");
+          const newTrack = await getAudioTrack(audioSource, next);
+          currentAudioTrackRef.current?.stop();
+          currentAudioTrackRef.current = newTrack;
+          await audioSenderRef.current.replaceTrack(newTrack);
+          updatePreview();
+          setStatus("Streaming");
+        } catch (err) {
+          setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    },
+    [audioProcessing, audioSource, updatePreview],
   );
 
   return (
@@ -460,6 +555,12 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
             options={selectOptions(VIDEO_BITRATES)}
             onChange={handleVideoBitrateChange}
           />
+          <SourceSelect
+            label="Degradation preference"
+            value={degradationPreference}
+            options={selectOptions(DEGRADATION_PREFERENCES)}
+            onChange={handleDegradationPreferenceChange}
+          />
         </OptionGroup>
         <OptionGroup label="Audio">
           <SourceSelect
@@ -474,6 +575,34 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
             options={selectOptions(AUDIO_BITRATES)}
             onChange={handleAudioBitrateChange}
           />
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+              Processing
+            </span>
+            <Checkbox
+              label="Echo cancellation"
+              checked={audioProcessing.echoCancellation}
+              onChange={(v) => handleAudioProcessingChange("echoCancellation", v)}
+            />
+            <Checkbox
+              label="Noise suppression"
+              checked={audioProcessing.noiseSuppression}
+              onChange={(v) => handleAudioProcessingChange("noiseSuppression", v)}
+            />
+            <Checkbox
+              label="Auto gain control"
+              checked={audioProcessing.autoGainControl}
+              onChange={(v) => handleAudioProcessingChange("autoGainControl", v)}
+            />
+          </div>
         </OptionGroup>
       </div>
 
@@ -565,6 +694,35 @@ function OptionGroup({ label, children }: { label: string; children: ReactNode }
       </legend>
       {children}
     </fieldset>
+  );
+}
+
+function Checkbox({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: "0.9rem",
+        cursor: "pointer",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      {label}
+    </label>
   );
 }
 
