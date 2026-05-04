@@ -495,7 +495,15 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   );
 
   return (
-    <>
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "auto",
+      }}
+    >
       <div
         style={{
           display: "flex",
@@ -648,7 +656,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
       <div
         style={{
           flex: 1,
-          minHeight: 0,
+          minHeight: 240,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -663,7 +671,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
           style={{ maxWidth: "100%", maxHeight: "100%", width: "100%", height: "100%" }}
         />
       </div>
-    </>
+    </div>
   );
 }
 
