@@ -695,7 +695,7 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
                     const n = parseFloat(e.target.value);
                     if (Number.isFinite(n)) setOffsetB(n);
                   }}
-                  style={{ width: "10ch", padding: "0.2rem 0.4rem", fontFamily: "monospace" }}
+                  style={{ width: "16ch", padding: "0.2rem 0.4rem", fontFamily: "monospace" }}
                 />
                 {slotB.wav && (
                   <span style={{ color: "var(--text-dim)", fontFamily: "monospace" }}>
@@ -831,29 +831,32 @@ function SlotPlayer({
 
 function DiffSummary({ a, b, offsetB }: { a: WavData; b: WavData; offsetB: number }) {
   const stats = useMemo(() => {
-    if (a.sampleRate !== b.sampleRate || a.numChannels !== b.numChannels) return null;
-    // B sample j corresponds to A sample i where i = j + offsetSamples.
-    const offsetSamples = Math.round(offsetB * a.sampleRate);
-    const iLo = Math.max(0, offsetSamples);
-    const iHi = Math.min(a.totalFrames, b.totalFrames + offsetSamples);
+    if (a.numChannels !== b.numChannels) return null;
+    // For each A sample i at time t = i/aRate, sample B linearly at time (t - offsetB).
+    const lastB = b.totalFrames - 1;
     let maxAbs = 0;
     let sumSq = 0;
     let count = 0;
     for (let c = 0; c < a.numChannels; c++) {
       const ca = a.channels[c];
       const cb = b.channels[c];
-      for (let i = iLo; i < iHi; i++) {
-        const j = i - offsetSamples;
-        const d = ca[i] - cb[j];
+      for (let i = 0; i < a.totalFrames; i++) {
+        const jF = (i / a.sampleRate - offsetB) * b.sampleRate;
+        if (jF < 0 || jF > lastB) continue;
+        const j0 = Math.floor(jF);
+        const frac = jF - j0;
+        const j1 = j0 + 1 <= lastB ? j0 + 1 : j0;
+        const bVal = cb[j0] * (1 - frac) + cb[j1] * frac;
+        const d = ca[i] - bVal;
         const ad = Math.abs(d);
         if (ad > maxAbs) maxAbs = ad;
         sumSq += d * d;
         count++;
       }
     }
-    if (count === 0) return { maxAbs: 0, rmse: 0, framesCompared: 0, offsetSamples };
+    if (count === 0) return { maxAbs: 0, rmse: 0, framesCompared: 0 };
     const rmse = Math.sqrt(sumSq / count);
-    return { maxAbs, rmse, framesCompared: iHi - iLo, offsetSamples };
+    return { maxAbs, rmse, framesCompared: count / a.numChannels };
   }, [a, b, offsetB]);
 
   return (
@@ -868,7 +871,7 @@ function DiffSummary({ a, b, offsetB }: { a: WavData; b: WavData; offsetB: numbe
       <div style={{ marginBottom: "0.4rem", fontWeight: 600 }}>A vs B</div>
       {!stats ? (
         <div style={{ color: "var(--text-muted)" }}>
-          Files have different sample rates or channel counts; sample-by-sample diff not available.
+          Files have different channel counts; diff not available.
         </div>
       ) : (
         <div
@@ -880,10 +883,9 @@ function DiffSummary({ a, b, offsetB }: { a: WavData; b: WavData; offsetB: numbe
             color: "var(--text-muted)",
           }}
         >
-          <Field k="Frames compared" v={stats.framesCompared.toLocaleString()} />
-          <Field k="B offset (samples)" v={stats.offsetSamples.toLocaleString()} />
+          <Field k="A samples compared" v={Math.round(stats.framesCompared).toLocaleString()} />
           <Field k="Max |A − B|" v={stats.maxAbs.toExponential(3)} />
-          <Field k="RMSE" v={stats.rmse.toExponential(3)} />
+          <Field k="RMSE (linear interp.)" v={stats.rmse.toExponential(3)} />
           <Field
             k="Length match"
             v={
