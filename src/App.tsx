@@ -5,7 +5,12 @@ import WhepPlayer from "./tools/WhepPlayer.tsx";
 import WavInspector from "./tools/WavInspector.tsx";
 
 const TOOLS = [
-  { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard", scrollable: true },
+  {
+    id: "smelter-stats",
+    name: "Smelter Stats",
+    description: "Real-time statistics dashboard",
+    scrollable: true,
+  },
   {
     id: "whip-streamer",
     name: "WHIP Streamer",

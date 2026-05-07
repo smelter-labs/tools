@@ -699,8 +699,8 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
                 />
                 {slotB.wav && (
                   <span style={{ color: "var(--text-dim)", fontFamily: "monospace" }}>
-                    ({Math.round(offsetB * slotB.wav.sampleRate)} samples @{" "}
-                    {slotB.wav.sampleRate} Hz)
+                    ({Math.round(offsetB * slotB.wav.sampleRate)} samples @ {slotB.wav.sampleRate}{" "}
+                    Hz)
                   </span>
                 )}
               </label>
@@ -758,9 +758,7 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
             />
           )}
 
-          {slotA.wav && slotB.wav && (
-            <DiffSummary a={slotA.wav} b={slotB.wav} offsetB={offsetB} />
-          )}
+          {slotA.wav && slotB.wav && <DiffSummary a={slotA.wav} b={slotB.wav} offsetB={offsetB} />}
         </>
       )}
     </div>

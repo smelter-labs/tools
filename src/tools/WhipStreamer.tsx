@@ -592,9 +592,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
               minWidth: 200,
             }}
           >
-            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
-              Processing
-            </span>
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Processing</span>
             <Checkbox
               label="Echo cancellation"
               checked={audioProcessing.echoCancellation}
@@ -724,11 +722,7 @@ function Checkbox({
         cursor: "pointer",
       }}
     >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
   );
