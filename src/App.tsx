@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import SmelterStats from "./tools/SmelterStats.tsx";
 import WhipStreamer from "./tools/WhipStreamer.tsx";
 import WhepPlayer from "./tools/WhepPlayer.tsx";
+import WavInspector from "./tools/WavInspector.tsx";
 
 const TOOLS = [
   { id: "smelter-stats", name: "Smelter Stats", description: "Real-time statistics dashboard", scrollable: true },
@@ -15,6 +16,12 @@ const TOOLS = [
     id: "whep-player",
     name: "WHEP Player",
     description: "Receive and play a stream via WebRTC WHEP",
+    scrollable: false,
+  },
+  {
+    id: "wav-inspector",
+    name: "WAV Inspector",
+    description: "Inspect WAV files and compare waveforms sample-by-sample",
     scrollable: false,
   },
 ] as const;
@@ -51,6 +58,8 @@ function ToolPage({ id, params }: { id: ToolId; params: URLSearchParams }) {
       return <WhipStreamer params={params} />;
     case "whep-player":
       return <WhepPlayer params={params} />;
+    case "wav-inspector":
+      return <WavInspector params={params} />;
   }
 }
 
