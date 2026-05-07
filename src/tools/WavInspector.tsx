@@ -139,10 +139,12 @@ const COLORS = ["#f24664", "#46c8f2"];
 
 function formatTime(seconds: number): string {
   if (!isFinite(seconds)) return "—";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds - mins * 60;
-  if (mins > 0) return `${mins}:${secs.toFixed(3).padStart(6, "0")}`;
-  return `${secs.toFixed(3)}s`;
+  const sign = seconds < 0 ? "-" : "";
+  const abs = Math.abs(seconds);
+  const mins = Math.floor(abs / 60);
+  const secs = abs - mins * 60;
+  if (mins > 0) return `${sign}${mins}:${secs.toFixed(5).padStart(8, "0")}`;
+  return `${sign}${secs.toFixed(5)}s`;
 }
 
 function formatBytes(n: number): string {
@@ -155,6 +157,7 @@ interface WaveformProps {
   wav: WavData;
   view: ViewState; // in seconds (we use seconds across files for shared view)
   maxDuration: number; // upper bound for clamping the view (may exceed this wav's own length)
+  timeOffset: number; // seconds to shift this wav along the display timeline
   color: string;
   height: number;
   cursorSeconds: number | null;
@@ -166,6 +169,7 @@ function Waveform({
   wav,
   view,
   maxDuration,
+  timeOffset,
   color,
   height,
   cursorSeconds,
@@ -213,8 +217,8 @@ function Waveform({
 
     // Pixel range over which this wav has data (rest of the canvas stays empty,
     // so files of different durations align in absolute time).
-    const xDataStart = Math.max(0, timeToX(0));
-    const xDataEnd = Math.min(width, timeToX(wav.durationSeconds));
+    const xDataStart = Math.max(0, timeToX(timeOffset));
+    const xDataEnd = Math.min(width, timeToX(timeOffset + wav.durationSeconds));
 
     for (let c = 0; c < numCh; c++) {
       const cy = c * chHeight + chHeight / 2;
@@ -238,8 +242,8 @@ function Waveform({
         for (let x = xLo; x < xHi; x++) {
           const t0 = view.start + x * secondsPerPixel;
           const t1 = t0 + secondsPerPixel;
-          const f0 = Math.max(0, Math.floor(t0 * wav.sampleRate));
-          const f1 = Math.min(wav.totalFrames, Math.floor(t1 * wav.sampleRate) + 1);
+          const f0 = Math.max(0, Math.floor((t0 - timeOffset) * wav.sampleRate));
+          const f1 = Math.min(wav.totalFrames, Math.floor((t1 - timeOffset) * wav.sampleRate) + 1);
           if (f1 <= f0) continue;
           let mn = Infinity;
           let mx = -Infinity;
@@ -257,12 +261,15 @@ function Waveform({
         ctx.stroke();
       } else {
         // Per-sample line, with dots when very zoomed in.
-        const f0 = Math.max(0, Math.floor(view.start * wav.sampleRate));
-        const f1 = Math.min(wav.totalFrames - 1, Math.ceil(view.end * wav.sampleRate));
+        const f0 = Math.max(0, Math.floor((view.start - timeOffset) * wav.sampleRate));
+        const f1 = Math.min(
+          wav.totalFrames - 1,
+          Math.ceil((view.end - timeOffset) * wav.sampleRate),
+        );
         if (f1 >= f0) {
           ctx.beginPath();
           for (let i = f0; i <= f1; i++) {
-            const x = timeToX(i / wav.sampleRate);
+            const x = timeToX(i / wav.sampleRate + timeOffset);
             const y = cy - data[i] * (chHeight / 2 - 2);
             if (i === f0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
@@ -270,7 +277,7 @@ function Waveform({
           ctx.stroke();
           if (pxPerFrame >= 6) {
             for (let i = f0; i <= f1; i++) {
-              const x = timeToX(i / wav.sampleRate);
+              const x = timeToX(i / wav.sampleRate + timeOffset);
               const y = cy - data[i] * (chHeight / 2 - 2);
               ctx.beginPath();
               ctx.arc(x, y, 2, 0, Math.PI * 2);
@@ -311,7 +318,7 @@ function Waveform({
       ctx.lineTo(x + 0.5, height);
       ctx.stroke();
     }
-  }, [wav, view, width, height, color, cursorSeconds]);
+  }, [wav, view, width, height, color, cursorSeconds, timeOffset]);
 
   useEffect(() => {
     draw();
@@ -524,6 +531,8 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
   const [cursor, setCursor] = useState<number | null>(null);
   const [linkView, setLinkView] = useState(true);
   const [viewB, setViewB] = useState<ViewState>({ start: 0, end: 1 });
+  const [offsetB, setOffsetB] = useState(0);
+  const [offsetBText, setOffsetBText] = useState("0");
 
   const loadFile = async (file: File, slot: "A" | "B") => {
     const setter = slot === "A" ? setSlotA : setSlotB;
@@ -546,7 +555,7 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
 
   const linkedMaxDuration = Math.max(
     slotA.wav?.durationSeconds ?? 0,
-    slotB.wav?.durationSeconds ?? 0,
+    (slotB.wav?.durationSeconds ?? 0) + offsetB,
   );
 
   const playRef = useRef<{ ctx: AudioContext; src: AudioBufferSourceNode } | null>(null);
@@ -598,14 +607,14 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
 
   const cursorInfo = useMemo(() => {
     if (cursor === null) return null;
-    const sample = (wav: WavData | null) => {
+    const sample = (wav: WavData | null, offset: number) => {
       if (!wav) return null;
-      const idx = Math.round(cursor * wav.sampleRate);
+      const idx = Math.round((cursor - offset) * wav.sampleRate);
       if (idx < 0 || idx >= wav.totalFrames) return null;
       return { idx, values: wav.channels.map((c) => c[idx]) };
     };
-    return { time: cursor, a: sample(slotA.wav), b: sample(slotB.wav) };
-  }, [cursor, slotA.wav, slotB.wav]);
+    return { time: cursor, a: sample(slotA.wav, 0), b: sample(slotB.wav, offsetB) };
+  }, [cursor, slotA.wav, slotB.wav, offsetB]);
 
   const onViewChangeA = (v: ViewState) => {
     setView(v);
@@ -674,6 +683,28 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
                 Link zoom &amp; pan
               </label>
             )}
+            {slotA.wav && slotB.wav && (
+              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                B offset (s):
+                <input
+                  type="number"
+                  step="0.00001"
+                  value={offsetBText}
+                  onChange={(e) => {
+                    setOffsetBText(e.target.value);
+                    const n = parseFloat(e.target.value);
+                    if (Number.isFinite(n)) setOffsetB(n);
+                  }}
+                  style={{ width: "10ch", padding: "0.2rem 0.4rem", fontFamily: "monospace" }}
+                />
+                {slotB.wav && (
+                  <span style={{ color: "var(--text-dim)", fontFamily: "monospace" }}>
+                    ({Math.round(offsetB * slotB.wav.sampleRate)} samples @{" "}
+                    {slotB.wav.sampleRate} Hz)
+                  </span>
+                )}
+              </label>
+            )}
             <span style={{ color: "var(--text-muted)" }}>
               View: {formatTime(view.start)} – {formatTime(view.end)} (
               {formatTime(view.end - view.start)})
@@ -696,6 +727,7 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
               color={COLORS[0]}
               view={view}
               maxDuration={linkView ? linkedMaxDuration : slotA.wav.durationSeconds}
+              timeOffset={0}
               cursor={cursor}
               onCursor={setCursor}
               onViewChange={onViewChangeA}
@@ -709,16 +741,26 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
               wav={slotB.wav}
               color={COLORS[1]}
               view={linkView ? view : viewB}
-              maxDuration={linkView ? linkedMaxDuration : slotB.wav.durationSeconds}
+              maxDuration={
+                linkView ? linkedMaxDuration : slotB.wav.durationSeconds + Math.max(0, offsetB)
+              }
+              timeOffset={offsetB}
               cursor={cursor}
               onCursor={setCursor}
               onViewChange={onViewChangeB}
-              onPlay={() => playSlot(slotB.wav!, cursor ?? viewB.start)}
+              onPlay={() =>
+                playSlot(
+                  slotB.wav!,
+                  Math.max(0, (cursor ?? (linkView ? view.start : viewB.start)) - offsetB),
+                )
+              }
               onStop={stopPlayback}
             />
           )}
 
-          {slotA.wav && slotB.wav && <DiffSummary a={slotA.wav} b={slotB.wav} />}
+          {slotA.wav && slotB.wav && (
+            <DiffSummary a={slotA.wav} b={slotB.wav} offsetB={offsetB} />
+          )}
         </>
       )}
     </div>
@@ -731,6 +773,7 @@ function SlotPlayer({
   color,
   view,
   maxDuration,
+  timeOffset,
   cursor,
   onCursor,
   onViewChange,
@@ -742,6 +785,7 @@ function SlotPlayer({
   color: string;
   view: ViewState;
   maxDuration: number;
+  timeOffset: number;
   cursor: number | null;
   onCursor: (s: number | null) => void;
   onViewChange: (v: ViewState) => void;
@@ -776,6 +820,7 @@ function SlotPlayer({
         wav={wav}
         view={view}
         maxDuration={maxDuration}
+        timeOffset={timeOffset}
         color={color}
         height={Math.max(120, 80 * wav.numChannels)}
         cursorSeconds={cursor}
@@ -786,27 +831,32 @@ function SlotPlayer({
   );
 }
 
-function DiffSummary({ a, b }: { a: WavData; b: WavData }) {
+function DiffSummary({ a, b, offsetB }: { a: WavData; b: WavData; offsetB: number }) {
   const stats = useMemo(() => {
     if (a.sampleRate !== b.sampleRate || a.numChannels !== b.numChannels) return null;
-    const n = Math.min(a.totalFrames, b.totalFrames);
+    // B sample j corresponds to A sample i where i = j + offsetSamples.
+    const offsetSamples = Math.round(offsetB * a.sampleRate);
+    const iLo = Math.max(0, offsetSamples);
+    const iHi = Math.min(a.totalFrames, b.totalFrames + offsetSamples);
     let maxAbs = 0;
     let sumSq = 0;
     let count = 0;
     for (let c = 0; c < a.numChannels; c++) {
       const ca = a.channels[c];
       const cb = b.channels[c];
-      for (let i = 0; i < n; i++) {
-        const d = ca[i] - cb[i];
+      for (let i = iLo; i < iHi; i++) {
+        const j = i - offsetSamples;
+        const d = ca[i] - cb[j];
         const ad = Math.abs(d);
         if (ad > maxAbs) maxAbs = ad;
         sumSq += d * d;
         count++;
       }
     }
-    const rmse = Math.sqrt(sumSq / Math.max(1, count));
-    return { maxAbs, rmse, framesCompared: n };
-  }, [a, b]);
+    if (count === 0) return { maxAbs: 0, rmse: 0, framesCompared: 0, offsetSamples };
+    const rmse = Math.sqrt(sumSq / count);
+    return { maxAbs, rmse, framesCompared: iHi - iLo, offsetSamples };
+  }, [a, b, offsetB]);
 
   return (
     <div
@@ -833,6 +883,7 @@ function DiffSummary({ a, b }: { a: WavData; b: WavData }) {
           }}
         >
           <Field k="Frames compared" v={stats.framesCompared.toLocaleString()} />
+          <Field k="B offset (samples)" v={stats.offsetSamples.toLocaleString()} />
           <Field k="Max |A − B|" v={stats.maxAbs.toExponential(3)} />
           <Field k="RMSE" v={stats.rmse.toExponential(3)} />
           <Field
