@@ -18,7 +18,23 @@ interface TrackBitrate {
   bitrate_1_minute: number;
 }
 
-interface SlidingWindowBufferStats {
+interface RtpSlidingWindowBufferStats {
+  effective_buffer_on_write_avg_seconds?: number;
+  effective_buffer_on_write_max_seconds?: number;
+  effective_buffer_on_write_min_seconds?: number;
+  effective_buffer_on_pop_avg_seconds?: number;
+  effective_buffer_on_pop_max_seconds?: number;
+  effective_buffer_on_pop_min_seconds?: number;
+  // FALLBACK: remove these once all servers expose the *_on_pop_* fields above.
+  effective_buffer_avg_seconds?: number;
+  effective_buffer_max_seconds?: number;
+  effective_buffer_min_seconds?: number;
+  input_buffer_avg_seconds: number;
+  input_buffer_max_seconds: number;
+  input_buffer_min_seconds: number;
+}
+
+interface HlsSlidingWindowBufferStats {
   effective_buffer_avg_seconds: number;
   effective_buffer_max_seconds: number;
   effective_buffer_min_seconds: number;
@@ -30,11 +46,11 @@ interface SlidingWindowBufferStats {
 interface RtpTrack extends TrackBitrate {
   packets_lost: number;
   packets_received: number;
-  last_10_seconds: SlidingWindowBufferStats;
+  last_10_seconds: RtpSlidingWindowBufferStats;
 }
 
 interface HlsTrack extends TrackBitrate {
-  last_10_seconds: SlidingWindowBufferStats;
+  last_10_seconds: HlsSlidingWindowBufferStats;
 }
 
 interface StatsReport {
@@ -90,16 +106,48 @@ function extraInfo(r: InputStatsReport | OutputStatsReport): string[] {
   return parts;
 }
 
+interface NormalizedBufferStats {
+  input_buffer_avg_seconds: number;
+  effective_buffer_on_write_min_seconds: number | null;
+  effective_buffer_on_pop_min_seconds: number;
+}
+
+function normalizeRtp(s: RtpSlidingWindowBufferStats): NormalizedBufferStats {
+  return {
+    input_buffer_avg_seconds: s.input_buffer_avg_seconds,
+    effective_buffer_on_write_min_seconds: s.effective_buffer_on_write_min_seconds ?? null,
+    effective_buffer_on_pop_min_seconds:
+      s.effective_buffer_on_pop_min_seconds ??
+      // FALLBACK: legacy field name — drop this `??` branch once servers ship the split fields.
+      s.effective_buffer_min_seconds ??
+      0,
+  };
+}
+
+function normalizeHls(s: HlsSlidingWindowBufferStats): NormalizedBufferStats {
+  return {
+    input_buffer_avg_seconds: s.input_buffer_avg_seconds,
+    effective_buffer_on_write_min_seconds: null,
+    effective_buffer_on_pop_min_seconds: s.effective_buffer_min_seconds,
+  };
+}
+
 function getInputBufferStats(
   r: InputStatsReport,
-): { video: SlidingWindowBufferStats; audio: SlidingWindowBufferStats } | null {
+): { video: NormalizedBufferStats; audio: NormalizedBufferStats } | null {
   switch (r.type) {
     case "rtp":
     case "whip":
     case "whep":
-      return { video: r.video_rtp.last_10_seconds, audio: r.audio_rtp.last_10_seconds };
+      return {
+        video: normalizeRtp(r.video_rtp.last_10_seconds),
+        audio: normalizeRtp(r.audio_rtp.last_10_seconds),
+      };
     case "hls":
-      return { video: r.video.last_10_seconds, audio: r.audio.last_10_seconds };
+      return {
+        video: normalizeHls(r.video.last_10_seconds),
+        audio: normalizeHls(r.audio.last_10_seconds),
+      };
     default:
       return null;
   }
@@ -116,9 +164,11 @@ interface BitratePoint {
 interface BufferPoint {
   time: string;
   video_input_buffer: number;
-  video_effective_buffer: number;
+  video_effective_buffer_on_write: number;
+  video_effective_buffer_on_pop: number;
   audio_input_buffer: number;
-  audio_effective_buffer: number;
+  audio_effective_buffer_on_write: number;
+  audio_effective_buffer_on_pop: number;
 }
 
 const MAX_CHART_POINTS = 300;
@@ -192,9 +242,13 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
             {
               time: now,
               video_input_buffer: bufferStats.video.input_buffer_avg_seconds,
-              video_effective_buffer: bufferStats.video.effective_buffer_avg_seconds,
+              video_effective_buffer_on_write:
+                bufferStats.video.effective_buffer_on_write_min_seconds ?? NaN,
+              video_effective_buffer_on_pop: bufferStats.video.effective_buffer_on_pop_min_seconds,
               audio_input_buffer: bufferStats.audio.input_buffer_avg_seconds,
-              audio_effective_buffer: bufferStats.audio.effective_buffer_avg_seconds,
+              audio_effective_buffer_on_write:
+                bufferStats.audio.effective_buffer_on_write_min_seconds ?? NaN,
+              audio_effective_buffer_on_pop: bufferStats.audio.effective_buffer_on_pop_min_seconds,
             },
           ];
         }
@@ -346,13 +400,16 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
 function BufferChart({ data }: { data: BufferPoint[] }) {
   if (data.length === 0) return null;
 
+  const toMs = (v: number) => (Number.isFinite(v) ? v * 1000 : NaN);
   // Convert to milliseconds for display
   const chartData = data.map((d) => ({
     time: d.time,
-    video_input_buffer: d.video_input_buffer * 1000,
-    video_effective_buffer: d.video_effective_buffer * 1000,
-    audio_input_buffer: d.audio_input_buffer * 1000,
-    audio_effective_buffer: d.audio_effective_buffer * 1000,
+    video_input_buffer: toMs(d.video_input_buffer),
+    video_effective_buffer_on_write: toMs(d.video_effective_buffer_on_write),
+    video_effective_buffer_on_pop: toMs(d.video_effective_buffer_on_pop),
+    audio_input_buffer: toMs(d.audio_input_buffer),
+    audio_effective_buffer_on_write: toMs(d.audio_effective_buffer_on_write),
+    audio_effective_buffer_on_pop: toMs(d.audio_effective_buffer_on_pop),
   }));
 
   return (
@@ -402,8 +459,19 @@ function BufferChart({ data }: { data: BufferPoint[] }) {
           />
           <Line
             type="monotone"
-            dataKey="video_effective_buffer"
-            name="Video Effective Buffer"
+            dataKey="video_effective_buffer_on_write"
+            name="Video Effective Buffer (on write, min)"
+            stroke="#8884d8"
+            strokeWidth={2}
+            strokeDasharray="2 4"
+            dot={false}
+            isAnimationActive={false}
+            connectNulls={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="video_effective_buffer_on_pop"
+            name="Video Effective Buffer (on pop, min)"
             stroke="#8884d8"
             strokeWidth={2}
             strokeDasharray="5 5"
@@ -421,8 +489,19 @@ function BufferChart({ data }: { data: BufferPoint[] }) {
           />
           <Line
             type="monotone"
-            dataKey="audio_effective_buffer"
-            name="Audio Effective Buffer"
+            dataKey="audio_effective_buffer_on_write"
+            name="Audio Effective Buffer (on write, min)"
+            stroke="#82ca9d"
+            strokeWidth={2}
+            strokeDasharray="2 4"
+            dot={false}
+            isAnimationActive={false}
+            connectNulls={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="audio_effective_buffer_on_pop"
+            name="Audio Effective Buffer (on pop, min)"
             stroke="#82ca9d"
             strokeWidth={2}
             strokeDasharray="5 5"

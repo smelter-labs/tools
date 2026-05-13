@@ -137,6 +137,12 @@ interface ViewState {
 
 const COLORS = ["#f24664", "#46c8f2"];
 
+function formatFixed(n: number): string {
+  if (n === 0) return "0";
+  const digits = Math.max(0, -Math.floor(Math.log10(Math.abs(n))) + 3);
+  return n.toFixed(Math.min(digits, 20));
+}
+
 function formatTime(seconds: number): string {
   if (!isFinite(seconds)) return "—";
   const sign = seconds < 0 ? "-" : "";
@@ -153,16 +159,23 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+interface TimeRange {
+  start: number;
+  end: number;
+}
+
 interface WaveformProps {
   wav: WavData;
-  view: ViewState; // in seconds (we use seconds across files for shared view)
-  maxDuration: number; // upper bound for clamping the view (may exceed this wav's own length)
-  timeOffset: number; // seconds to shift this wav along the display timeline
+  view: ViewState;
+  maxDuration: number;
+  timeOffset: number;
   color: string;
   height: number;
   cursorSeconds: number | null;
+  range: TimeRange | null;
   onCursorChange: (s: number | null) => void;
   onViewChange: (next: ViewState) => void;
+  onRangeChange: (r: TimeRange | null) => void;
 }
 
 function Waveform({
@@ -173,8 +186,10 @@ function Waveform({
   color,
   height,
   cursorSeconds,
+  range,
   onCursorChange,
   onViewChange,
+  onRangeChange,
 }: WaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -308,6 +323,24 @@ function Waveform({
       ctx.setLineDash([]);
     }
 
+    // Range highlight.
+    if (range) {
+      const x0 = Math.max(0, timeToX(range.start));
+      const x1 = Math.min(width, timeToX(range.end));
+      if (x1 > x0) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+        ctx.fillRect(x0, 0, x1 - x0, height);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x0 + 0.5, 0);
+        ctx.lineTo(x0 + 0.5, height);
+        ctx.moveTo(x1 + 0.5, 0);
+        ctx.lineTo(x1 + 0.5, height);
+        ctx.stroke();
+      }
+    }
+
     // Cursor.
     if (cursorSeconds !== null && cursorSeconds >= view.start && cursorSeconds <= view.end) {
       const x = ((cursorSeconds - view.start) / (view.end - view.start)) * width;
@@ -318,14 +351,16 @@ function Waveform({
       ctx.lineTo(x + 0.5, height);
       ctx.stroke();
     }
-  }, [wav, view, width, height, color, cursorSeconds, timeOffset]);
+  }, [wav, view, width, height, color, cursorSeconds, timeOffset, range]);
 
   useEffect(() => {
     draw();
   }, [draw]);
 
   const dragRef = useRef<{ startX: number; startView: ViewState; rectWidth: number } | null>(null);
+  const rangeDragRef = useRef<{ startTime: number; rect: DOMRect } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [rangeDragging, setRangeDragging] = useState(false);
 
   const clampView = useCallback(
     (start: number, end: number): ViewState => {
@@ -350,11 +385,9 @@ function Waveform({
     const frac = x / rect.width;
     const span = view.end - view.start;
     if (e.shiftKey) {
-      // Pan with shift+wheel.
       const delta = (e.deltaY / rect.width) * span;
       onViewChange(clampView(view.start + delta, view.end + delta));
     } else {
-      // Zoom around cursor (default).
       const factor = Math.pow(1.0015, e.deltaY);
       const newSpan = Math.max(1 / wav.sampleRate, Math.min(maxDuration, span * factor));
       const anchor = view.start + frac * span;
@@ -362,16 +395,29 @@ function Waveform({
     }
   };
 
+  const xToTime = useCallback(
+    (clientX: number, rect: DOMRect) => {
+      const frac = (clientX - rect.left) / rect.width;
+      return view.start + frac * (view.end - view.start);
+    },
+    [view],
+  );
+
   const onMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    dragRef.current = { startX: e.clientX, startView: view, rectWidth: rect.width };
-    setDragging(true);
+    if (e.shiftKey) {
+      const t = xToTime(e.clientX, rect);
+      rangeDragRef.current = { startTime: t, rect };
+      onRangeChange({ start: t, end: t });
+      setRangeDragging(true);
+    } else {
+      dragRef.current = { startX: e.clientX, startView: view, rectWidth: rect.width };
+      setDragging(true);
+    }
     e.preventDefault();
   };
 
-  // Bind document-level listeners while dragging so the gesture works even when
-  // the mouse leaves the canvas.
   useEffect(() => {
     if (!dragging) return;
     const onMove = (e: MouseEvent) => {
@@ -393,6 +439,27 @@ function Waveform({
       window.removeEventListener("mouseup", onUp);
     };
   }, [dragging, clampView, onViewChange]);
+
+  useEffect(() => {
+    if (!rangeDragging) return;
+    const onMove = (e: MouseEvent) => {
+      const rd = rangeDragRef.current;
+      if (!rd) return;
+      const t = xToTime(e.clientX, rd.rect);
+      const s = rd.startTime;
+      onRangeChange({ start: Math.min(s, t), end: Math.max(s, t) });
+    };
+    const onUp = () => {
+      rangeDragRef.current = null;
+      setRangeDragging(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [rangeDragging, xToTime, onRangeChange]);
 
   const onMouseMove = (e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
@@ -417,7 +484,7 @@ function Waveform({
         height,
         border: "1px solid var(--border)",
         borderRadius: 4,
-        cursor: dragging ? "grabbing" : "grab",
+        cursor: rangeDragging ? "col-resize" : dragging ? "grabbing" : "grab",
         overflow: "hidden",
         userSelect: "none",
       }}
@@ -530,9 +597,11 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
   const [view, setView] = useState<ViewState>({ start: 0, end: 1 });
   const [cursor, setCursor] = useState<number | null>(null);
   const [linkView, setLinkView] = useState(true);
+  const [range, setRange] = useState<TimeRange | null>(null);
   const [viewB, setViewB] = useState<ViewState>({ start: 0, end: 1 });
   const [offsetB, setOffsetB] = useState(0);
   const [offsetBText, setOffsetBText] = useState("0");
+  const [sliderCenter, setSliderCenter] = useState(0);
 
   const loadFile = async (file: File, slot: "A" | "B") => {
     const setter = slot === "A" ? setSlotA : setSlotB;
@@ -684,26 +753,60 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
               </label>
             )}
             {slotA.wav && slotB.wav && (
-              <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                B offset (s):
-                <input
-                  type="number"
-                  step="0.00001"
-                  value={offsetBText}
-                  onChange={(e) => {
-                    setOffsetBText(e.target.value);
-                    const n = parseFloat(e.target.value);
-                    if (Number.isFinite(n)) setOffsetB(n);
-                  }}
-                  style={{ width: "16ch", padding: "0.2rem 0.4rem", fontFamily: "monospace" }}
-                />
-                {slotB.wav && (
-                  <span style={{ color: "var(--text-dim)", fontFamily: "monospace" }}>
-                    ({Math.round(offsetB * slotB.wav.sampleRate)} samples @ {slotB.wav.sampleRate}{" "}
-                    Hz)
-                  </span>
-                )}
-              </label>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  B offset (s):
+                  <input
+                    type="number"
+                    step="0.00001"
+                    value={offsetBText}
+                    onChange={(e) => {
+                      setOffsetBText(e.target.value);
+                      const n = parseFloat(e.target.value);
+                      if (Number.isFinite(n)) {
+                        setOffsetB(n);
+                        setSliderCenter(n);
+                      }
+                    }}
+                    style={{ width: "16ch", padding: "0.2rem 0.4rem", fontFamily: "monospace" }}
+                  />
+                  {slotB.wav && (
+                    <span style={{ color: "var(--text-dim)", fontFamily: "monospace" }}>
+                      ({Math.round(offsetB * slotB.wav.sampleRate)} samples @ {slotB.wav.sampleRate}{" "}
+                      Hz)
+                    </span>
+                  )}
+                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  {(() => {
+                    const halfRange = (view.end - view.start) / 20;
+                    const step = (view.end - view.start) / 10000;
+                    return (
+                      <>
+                        <input
+                          type="range"
+                          min={sliderCenter - halfRange}
+                          max={sliderCenter + halfRange}
+                          step={step}
+                          value={offsetB}
+                          onChange={(e) => {
+                            const n = parseFloat(e.target.value);
+                            setOffsetB(n);
+                            setOffsetBText(n.toFixed(8).replace(/0+$/, "").replace(/\.$/, ""));
+                          }}
+                          style={{ flex: 1, minWidth: 200 }}
+                        />
+                        <button
+                          onClick={() => setSliderCenter(offsetB)}
+                          style={{ fontSize: "0.8rem", padding: "0.2rem 0.5rem" }}
+                        >
+                          Re-center
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
             )}
             <span style={{ color: "var(--text-muted)" }}>
               View: {formatTime(view.start)} – {formatTime(view.end)} (
@@ -729,8 +832,10 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
               maxDuration={linkView ? linkedMaxDuration : slotA.wav.durationSeconds}
               timeOffset={0}
               cursor={cursor}
+              range={range}
               onCursor={setCursor}
               onViewChange={onViewChangeA}
+              onRangeChange={setRange}
               onPlay={() => playSlot(slotA.wav!, cursor ?? view.start)}
               onStop={stopPlayback}
             />
@@ -746,8 +851,10 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
               }
               timeOffset={offsetB}
               cursor={cursor}
+              range={range}
               onCursor={setCursor}
               onViewChange={onViewChangeB}
+              onRangeChange={setRange}
               onPlay={() =>
                 playSlot(
                   slotB.wav!,
@@ -758,7 +865,9 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
             />
           )}
 
-          {slotA.wav && slotB.wav && <DiffSummary a={slotA.wav} b={slotB.wav} offsetB={offsetB} />}
+          {slotA.wav && slotB.wav && (
+            <DiffSummary a={slotA.wav} b={slotB.wav} offsetB={offsetB} range={range} onClearRange={() => setRange(null)} />
+          )}
         </>
       )}
     </div>
@@ -773,8 +882,10 @@ function SlotPlayer({
   maxDuration,
   timeOffset,
   cursor,
+  range,
   onCursor,
   onViewChange,
+  onRangeChange,
   onPlay,
   onStop,
 }: {
@@ -785,8 +896,10 @@ function SlotPlayer({
   maxDuration: number;
   timeOffset: number;
   cursor: number | null;
+  range: TimeRange | null;
   onCursor: (s: number | null) => void;
   onViewChange: (v: ViewState) => void;
+  onRangeChange: (r: TimeRange | null) => void;
   onPlay: () => void;
   onStop: () => void;
 }) {
@@ -822,42 +935,83 @@ function SlotPlayer({
         color={color}
         height={Math.max(120, 80 * wav.numChannels)}
         cursorSeconds={cursor}
+        range={range}
         onCursorChange={onCursor}
         onViewChange={onViewChange}
+        onRangeChange={onRangeChange}
       />
     </div>
   );
 }
 
-function DiffSummary({ a, b, offsetB }: { a: WavData; b: WavData; offsetB: number }) {
+function computeRmseStats(
+  a: WavData,
+  b: WavData,
+  offsetB: number,
+  timeRange: { startFrame: number; endFrame: number } | null,
+) {
+  const lastB = b.totalFrames - 1;
+  let maxAbs = 0;
+  let sumSq = 0;
+  const sqErrors: number[] = [];
+  const iStart = timeRange ? timeRange.startFrame : 0;
+  const iEnd = timeRange ? timeRange.endFrame : a.totalFrames;
+  for (let c = 0; c < a.numChannels; c++) {
+    const ca = a.channels[c];
+    const cb = b.channels[c];
+    for (let i = iStart; i < iEnd; i++) {
+      const jF = (i / a.sampleRate - offsetB) * b.sampleRate;
+      if (jF < 0 || jF > lastB) continue;
+      const j0 = Math.floor(jF);
+      const frac = jF - j0;
+      const j1 = j0 + 1 <= lastB ? j0 + 1 : j0;
+      const bVal = cb[j0] * (1 - frac) + cb[j1] * frac;
+      const d = ca[i] - bVal;
+      const ad = Math.abs(d);
+      if (ad > maxAbs) maxAbs = ad;
+      const sq = d * d;
+      sumSq += sq;
+      sqErrors.push(sq);
+    }
+  }
+  const count = sqErrors.length;
+  if (count === 0) return { maxAbs: 0, rmse: 0, rmseTrimmed: 0, framesCompared: 0 };
+  const rmse = Math.sqrt(sumSq / count);
+
+  sqErrors.sort((x, y) => x - y);
+  const trimCount = Math.floor(count * 0.99);
+  let trimSumSq = 0;
+  for (let i = 0; i < trimCount; i++) trimSumSq += sqErrors[i];
+  const rmseTrimmed = trimCount > 0 ? Math.sqrt(trimSumSq / trimCount) : 0;
+
+  return { maxAbs, rmse, rmseTrimmed, framesCompared: count / a.numChannels };
+}
+
+function DiffSummary({
+  a,
+  b,
+  offsetB,
+  range,
+  onClearRange,
+}: {
+  a: WavData;
+  b: WavData;
+  offsetB: number;
+  range: TimeRange | null;
+  onClearRange: () => void;
+}) {
   const stats = useMemo(() => {
     if (a.numChannels !== b.numChannels) return null;
-    // For each A sample i at time t = i/aRate, sample B linearly at time (t - offsetB).
-    const lastB = b.totalFrames - 1;
-    let maxAbs = 0;
-    let sumSq = 0;
-    let count = 0;
-    for (let c = 0; c < a.numChannels; c++) {
-      const ca = a.channels[c];
-      const cb = b.channels[c];
-      for (let i = 0; i < a.totalFrames; i++) {
-        const jF = (i / a.sampleRate - offsetB) * b.sampleRate;
-        if (jF < 0 || jF > lastB) continue;
-        const j0 = Math.floor(jF);
-        const frac = jF - j0;
-        const j1 = j0 + 1 <= lastB ? j0 + 1 : j0;
-        const bVal = cb[j0] * (1 - frac) + cb[j1] * frac;
-        const d = ca[i] - bVal;
-        const ad = Math.abs(d);
-        if (ad > maxAbs) maxAbs = ad;
-        sumSq += d * d;
-        count++;
-      }
-    }
-    if (count === 0) return { maxAbs: 0, rmse: 0, framesCompared: 0 };
-    const rmse = Math.sqrt(sumSq / count);
-    return { maxAbs, rmse, framesCompared: count / a.numChannels };
+    return computeRmseStats(a, b, offsetB, null);
   }, [a, b, offsetB]);
+
+  const rangeStats = useMemo(() => {
+    if (!range || a.numChannels !== b.numChannels) return null;
+    const startFrame = Math.max(0, Math.floor(range.start * a.sampleRate));
+    const endFrame = Math.min(a.totalFrames, Math.ceil(range.end * a.sampleRate));
+    if (endFrame <= startFrame) return null;
+    return computeRmseStats(a, b, offsetB, { startFrame, endFrame });
+  }, [a, b, offsetB, range]);
 
   return (
     <div
@@ -874,27 +1028,72 @@ function DiffSummary({ a, b, offsetB }: { a: WavData; b: WavData; offsetB: numbe
           Files have different channel counts; diff not available.
         </div>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-            gap: "0.25rem 1rem",
-            fontSize: "0.85rem",
-            color: "var(--text-muted)",
-          }}
-        >
-          <Field k="A samples compared" v={Math.round(stats.framesCompared).toLocaleString()} />
-          <Field k="Max |A − B|" v={stats.maxAbs.toExponential(3)} />
-          <Field k="RMSE (linear interp.)" v={stats.rmse.toExponential(3)} />
-          <Field
-            k="Length match"
-            v={
-              a.totalFrames === b.totalFrames
-                ? "exact"
-                : `Δ=${(a.totalFrames - b.totalFrames).toLocaleString()} frames`
-            }
-          />
-        </div>
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+              gap: "0.25rem 1rem",
+              fontSize: "0.85rem",
+              color: "var(--text-muted)",
+            }}
+          >
+            <Field k="A samples compared" v={Math.round(stats.framesCompared).toLocaleString()} />
+            <Field k="Max |A − B|" v={formatFixed(stats.maxAbs)} />
+            <Field k="RMSE" v={formatFixed(stats.rmse)} />
+            <Field k="RMSE (99%)" v={formatFixed(stats.rmseTrimmed)} />
+            <Field
+              k="Length match"
+              v={
+                a.totalFrames === b.totalFrames
+                  ? "exact"
+                  : `Δ=${(a.totalFrames - b.totalFrames).toLocaleString()} frames`
+              }
+            />
+          </div>
+          {rangeStats && range && (
+            <>
+              <div
+                style={{
+                  marginTop: "0.6rem",
+                  marginBottom: "0.4rem",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.6rem",
+                }}
+              >
+                <span>
+                  Selection: {formatTime(range.start)} – {formatTime(range.end)} (
+                  {formatTime(range.end - range.start)})
+                </span>
+                <button
+                  onClick={onClearRange}
+                  style={{ fontSize: "0.8rem", padding: "0.15rem 0.5rem" }}
+                >
+                  Clear
+                </button>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                  gap: "0.25rem 1rem",
+                  fontSize: "0.85rem",
+                  color: "var(--text-muted)",
+                }}
+              >
+                <Field
+                  k="A samples compared"
+                  v={Math.round(rangeStats.framesCompared).toLocaleString()}
+                />
+                <Field k="Max |A − B|" v={formatFixed(rangeStats.maxAbs)} />
+                <Field k="RMSE" v={formatFixed(rangeStats.rmse)} />
+                <Field k="RMSE (99%)" v={formatFixed(rangeStats.rmseTrimmed)} />
+              </div>
+            </>
+          )}
+        </>
       )}
     </div>
   );
