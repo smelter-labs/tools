@@ -9,6 +9,7 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  ReferenceLine,
 } from "recharts";
 
 // ── Types matching the /stats API response ──────────────────────────
@@ -53,15 +54,39 @@ interface HlsTrack extends TrackBitrate {
   last_10_seconds: HlsSlidingWindowBufferStats;
 }
 
+interface AudioMixerSlidingWindowStats {
+  drift_avg_seconds: number;
+  drift_min_seconds: number;
+  drift_max_seconds: number;
+  buffer_duration_avg_seconds: number;
+  buffer_duration_min_seconds: number;
+  buffer_duration_max_seconds: number;
+  discontinuities_count: number;
+}
+
+interface AudioMixerStats {
+  discontinuities_total: number;
+  last_1_second: AudioMixerSlidingWindowStats;
+  last_10_seconds: AudioMixerSlidingWindowStats;
+}
+
 interface StatsReport {
   inputs: Record<string, InputStatsReport>;
   outputs: Record<string, OutputStatsReport>;
 }
 
 type InputStatsReport =
-  | { type: "rtp" | "whip" | "whep"; video_rtp: RtpTrack; audio_rtp: RtpTrack }
-  | { type: "hls"; video: HlsTrack; audio: HlsTrack }
-  | { type: "rtmp" | "mp4"; video: TrackBitrate; audio: TrackBitrate };
+  | {
+      type: "rtp" | "whip" | "whep";
+      video_rtp: RtpTrack;
+      audio: { rtp: RtpTrack; mixer: AudioMixerStats };
+    }
+  | { type: "hls"; video: HlsTrack; audio: { track: HlsTrack; mixer: AudioMixerStats } }
+  | {
+      type: "rtmp" | "mp4";
+      video: TrackBitrate;
+      audio: { track: TrackBitrate; mixer: AudioMixerStats };
+    };
 
 type OutputStatsReport =
   | { type: "whep"; video: TrackBitrate; audio: TrackBitrate; connected_peers: number }
@@ -75,11 +100,24 @@ function getInputTracks(r: InputStatsReport): { video: TrackBitrate; audio: Trac
     case "rtp":
     case "whip":
     case "whep":
-      return { video: r.video_rtp, audio: r.audio_rtp };
+      return { video: r.video_rtp, audio: r.audio.rtp };
+    case "hls":
+      return { video: r.video, audio: r.audio.track };
+    case "rtmp":
+    case "mp4":
+      return { video: r.video, audio: r.audio.track };
+  }
+}
+
+function getAudioMixerStats(r: InputStatsReport): AudioMixerStats | null {
+  switch (r.type) {
+    case "rtp":
+    case "whip":
+    case "whep":
     case "hls":
     case "rtmp":
     case "mp4":
-      return { video: r.video, audio: r.audio };
+      return r.audio.mixer ?? null;
   }
 }
 
@@ -99,7 +137,7 @@ function extraInfo(r: InputStatsReport | OutputStatsReport): string[] {
   if ("is_connected" in r) parts.push(r.is_connected ? "Connected" : "Disconnected");
   if ("video_rtp" in r) {
     const v = r.video_rtp as RtpTrack;
-    const a = r.audio_rtp as RtpTrack;
+    const a = (r as Extract<InputStatsReport, { type: "rtp" | "whip" | "whep" }>).audio.rtp;
     parts.push(`Video pkts: ${v.packets_received} (lost ${v.packets_lost})`);
     parts.push(`Audio pkts: ${a.packets_received} (lost ${a.packets_lost})`);
   }
@@ -141,12 +179,12 @@ function getInputBufferStats(
     case "whep":
       return {
         video: normalizeRtp(r.video_rtp.last_10_seconds),
-        audio: normalizeRtp(r.audio_rtp.last_10_seconds),
+        audio: normalizeRtp(r.audio.rtp.last_10_seconds),
       };
     case "hls":
       return {
         video: normalizeHls(r.video.last_10_seconds),
-        audio: normalizeHls(r.audio.last_10_seconds),
+        audio: normalizeHls(r.audio.track.last_10_seconds),
       };
     default:
       return null;
@@ -169,6 +207,20 @@ interface BufferPoint {
   audio_input_buffer: number;
   audio_effective_buffer_on_write: number;
   audio_effective_buffer_on_pop: number;
+}
+
+interface AudioMixerPoint {
+  time: string;
+  drift_avg: number;
+  drift_min: number;
+  drift_max: number;
+  buffer_duration_avg: number;
+  buffer_duration_min: number;
+  buffer_duration_max: number;
+  // Marker fields. `discontinuity` is set to a number only on samples where
+  // a new discontinuity was observed, so a ReferenceLine can be drawn at
+  // that x value.
+  discontinuity: boolean;
 }
 
 const MAX_CHART_POINTS = 300;
@@ -212,6 +264,9 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
   // Accumulate bitrate_1_second history per input/output id
   const historyRef = useRef<Record<string, BitratePoint[]>>({});
   const bufferHistoryRef = useRef<Record<string, BufferPoint[]>>({});
+  const audioMixerHistoryRef = useRef<Record<string, AudioMixerPoint[]>>({});
+  // Last seen `discontinuities_total` per input so we can detect new ones.
+  const lastDiscontinuityRef = useRef<Record<string, number>>({});
 
   const fetchStats = useCallback(async () => {
     if (!url) return;
@@ -252,6 +307,32 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
             },
           ];
         }
+
+        const mixer = getAudioMixerStats(input);
+        if (mixer) {
+          const w = mixer.last_1_second;
+          const prevMix = audioMixerHistoryRef.current[key] ?? [];
+          const prevTotal = lastDiscontinuityRef.current[key];
+          // Mark a sample as a discontinuity boundary when `discontinuities_total`
+          // grows since the previous poll. Ignore the very first sample so we
+          // don't draw a marker just because we have no baseline.
+          const hasDiscontinuity =
+            prevTotal !== undefined && mixer.discontinuities_total > prevTotal;
+          lastDiscontinuityRef.current[key] = mixer.discontinuities_total;
+          audioMixerHistoryRef.current[key] = [
+            ...prevMix.slice(-(MAX_CHART_POINTS - 1)),
+            {
+              time: now,
+              drift_avg: w.drift_avg_seconds,
+              drift_min: w.drift_min_seconds,
+              drift_max: w.drift_max_seconds,
+              buffer_duration_avg: w.buffer_duration_avg_seconds,
+              buffer_duration_min: w.buffer_duration_min_seconds,
+              buffer_duration_max: w.buffer_duration_max_seconds,
+              discontinuity: hasDiscontinuity,
+            },
+          ];
+        }
       }
 
       // Update history for outputs
@@ -283,6 +364,8 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
     }
     historyRef.current = {};
     bufferHistoryRef.current = {};
+    audioMixerHistoryRef.current = {};
+    lastDiscontinuityRef.current = {};
     saveToHistory("stats:url", url);
     setRunning(true);
   }, [url]);
@@ -327,6 +410,8 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                 const tracks = getInputTracks(input);
                 const history = historyRef.current[`input:${id}`] ?? [];
                 const bufferHistory = bufferHistoryRef.current[`input:${id}`] ?? [];
+                const audioMixerHistory = audioMixerHistoryRef.current[`input:${id}`] ?? [];
+                const mixer = getAudioMixerStats(input);
                 const extra = extraInfo(input);
                 return (
                   <div key={`input:${id}`} style={cardStyle}>
@@ -341,6 +426,11 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                         Audio (1m avg):{" "}
                         <strong>{formatBitrate(tracks.audio.bitrate_1_minute)}</strong>
                       </span>
+                      {mixer && (
+                        <span style={{ color: "var(--text-muted)" }}>
+                          Audio mixer discontinuities: {mixer.discontinuities_total}
+                        </span>
+                      )}
                       {extra.map((e, i) => (
                         <span key={i} style={{ color: "var(--text-muted)" }}>
                           {e}
@@ -349,6 +439,7 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
                     </div>
                     <BitrateChart data={history} />
                     <BufferChart data={bufferHistory} />
+                    <AudioMixerChart data={audioMixerHistory} />
                   </div>
                 );
               })}
@@ -505,6 +596,139 @@ function BufferChart({ data }: { data: BufferPoint[] }) {
             stroke="#82ca9d"
             strokeWidth={2}
             strokeDasharray="5 5"
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </>
+  );
+}
+
+function AudioMixerChart({ data }: { data: AudioMixerPoint[] }) {
+  if (data.length === 0) return null;
+
+  const toMs = (v: number) => (Number.isFinite(v) ? v * 1000 : NaN);
+  const chartData = data.map((d) => ({
+    time: d.time,
+    drift_avg: toMs(d.drift_avg),
+    drift_min: toMs(d.drift_min),
+    drift_max: toMs(d.drift_max),
+    buffer_duration_avg: toMs(d.buffer_duration_avg),
+    buffer_duration_min: toMs(d.buffer_duration_min),
+    buffer_duration_max: toMs(d.buffer_duration_max),
+  }));
+  const discontinuityTimes = data.filter((d) => d.discontinuity).map((d) => d.time);
+
+  return (
+    <>
+      <div
+        style={{
+          fontSize: "0.85rem",
+          fontWeight: 600,
+          margin: "0.75rem 0 0.25rem",
+          color: "var(--text-muted)",
+        }}
+      >
+        Audio mixer — drift &amp; buffer duration (last 1s window)
+      </div>
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+          <XAxis
+            dataKey="time"
+            tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+            interval="preserveStartEnd"
+            stroke="var(--border)"
+          />
+          <YAxis
+            tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+            unit=" ms"
+            width={80}
+            stroke="var(--border)"
+          />
+          <Tooltip
+            formatter={(v: number) => `${v.toFixed(2)} ms`}
+            contentStyle={{
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--text)",
+            }}
+          />
+          {discontinuityTimes.map((t, i) => (
+            <ReferenceLine
+              key={`disc-${i}-${t}`}
+              x={t}
+              stroke="var(--error, #e15759)"
+              strokeDasharray="4 2"
+              label={
+                i === 0
+                  ? {
+                      value: "discontinuity",
+                      position: "top",
+                      fill: "var(--error, #e15759)",
+                      fontSize: 10,
+                    }
+                  : undefined
+              }
+            />
+          ))}
+          <Line
+            type="monotone"
+            dataKey="drift_avg"
+            name="Drift (avg)"
+            stroke="#e07b00"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="drift_min"
+            name="Drift (min)"
+            stroke="#e07b00"
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="drift_max"
+            name="Drift (max)"
+            stroke="#e07b00"
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="buffer_duration_avg"
+            name="Buffer duration (avg)"
+            stroke="#3b82f6"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="buffer_duration_min"
+            name="Buffer duration (min)"
+            stroke="#3b82f6"
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            type="monotone"
+            dataKey="buffer_duration_max"
+            name="Buffer duration (max)"
+            stroke="#3b82f6"
+            strokeWidth={1}
+            strokeDasharray="3 3"
             dot={false}
             isAnimationActive={false}
           />
