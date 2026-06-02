@@ -16,11 +16,12 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
 export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
   const [broadcastPath, setBroadcastPath] = useSessionInput("moq:path", params, "path");
+  // TESTING ONLY: exact endpoint serving the relay's self-signed cert sha-256
+  // fingerprint. Empty or unreachable -> standard TLS verification.
+  const [certHashUrl, setCertHashUrl] = useSessionInput("moq:cert", params, "cert");
   const [source, setSource] = useState<SourceKind>("screen");
   const [audio, setAudio] = useState(true);
   const [wsFallback, setWsFallback] = useState(false);
-  // TESTING ONLY: pin self-signed relay cert, skip CA verification.
-  const [insecure, setInsecure] = useState(true);
 
   const [status, setStatus] = useState<PublishStatus>({ state: "stopped" });
   const [busy, setBusy] = useState(false);
@@ -51,6 +52,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
     saveToHistory("moq:path", broadcastPath);
+    if (certHashUrl) saveToHistory("moq:cert", certHashUrl);
     try {
       const handle = await startPublishing({
         serverUrl,
@@ -58,14 +60,14 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         source,
         audio,
         wsFallback,
-        insecure,
+        certHashUrl,
         onStatus: setStatus,
       });
       handleRef.current = handle;
       setRunning(true);
       if (videoRef.current) {
         videoRef.current.srcObject = handle.stream;
-        videoRef.current.play().catch(() => {});
+        videoRef.current.play().catch(() => { });
       }
     } catch (err) {
       setStatus({ state: "error", message: err instanceof Error ? err.message : String(err) });
@@ -109,6 +111,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           placeholder="test"
           label="Broadcast path"
         />
+        <SuggestInput
+          historyKey="moq:cert"
+          value={certHashUrl}
+          onChange={setCertHashUrl}
+          placeholder="http://localhost:8081/moq/certificate.sha256"
+          label="Cert fingerprint URL (optional)"
+        />
       </div>
 
       <div
@@ -143,12 +152,6 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             label="Enable WebSocket fallback"
             checked={wsFallback}
             onChange={setWsFallback}
-            disabled={disabled}
-          />
-          <Checkbox
-            label="Skip TLS cert verification (testing only)"
-            checked={insecure}
-            onChange={setInsecure}
             disabled={disabled}
           />
         </div>

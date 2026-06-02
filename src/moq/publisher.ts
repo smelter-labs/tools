@@ -58,13 +58,13 @@ export interface PublishOptions {
   audio: boolean;
   wsFallback: boolean;
   /**
-   * TESTING ONLY. Disables TLS CA verification by pinning the relay's
-   * self-signed cert via `serverCertificateHashes`. Fetches the sha-256
-   * fingerprint from the relay's `/certificate.sha256` endpoint. Browser
-   * WebTransport has no global "reject unauthorized = false" — this is the
-   * only supported way to accept an untrusted cert. NEVER use in production.
+   * TESTING ONLY. Exact endpoint that serves the relay's self-signed cert
+   * sha-256 fingerprint (hex). When set and reachable, the fingerprint is
+   * pinned via `serverCertificateHashes`, making WebTransport skip CA-chain
+   * verification for that cert. If empty/unset, or the fetch fails, connect
+   * falls back to standard TLS verification. NEVER use in production.
    */
-  insecure?: boolean;
+  certHashUrl?: string;
   onStatus?: (status: PublishStatus) => void;
 }
 
@@ -408,9 +408,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     const serverUrl = new URL(opts.serverUrl);
     const props: Net.Connection.ConnectProps = {};
     if (opts.wsFallback) props.websocket = { enabled: true };
-    if (opts.insecure) {
+    if (opts.certHashUrl) {
       // TESTING ONLY: bypass CA verification by pinning the relay's cert hash.
-      const certHashes = await fetchCertHashes(serverUrl);
+      // On any failure we leave props untouched -> standard TLS verification.
+      const certHashes = await fetchCertHashes(opts.certHashUrl);
       if (certHashes) props.webtransport = { serverCertificateHashes: certHashes };
     }
     conn = await Net.Connection.connect(
@@ -542,20 +543,16 @@ function closeEncoder(encoder: VideoEncoder | AudioEncoder) {
 
 /**
  * TESTING ONLY. Fetches the relay's self-signed cert sha-256 fingerprint from
- * `/certificate.sha256` and returns it as a `serverCertificateHashes` entry.
+ * the exact `endpoint` URL and returns it as a `serverCertificateHashes` entry.
  * Pinning the hash makes WebTransport skip CA-chain verification for that cert.
  * Returns undefined if the fingerprint can't be fetched/parsed (so connect
  * falls back to normal verification rather than silently failing).
  */
 async function fetchCertHashes(
-  serverUrl: URL,
+  endpoint: string,
 ): Promise<WebTransportHash[] | undefined> {
   try {
-    const fpUrl = new URL(serverUrl);
-    fpUrl.protocol = "http:";
-    fpUrl.pathname = "/certificate.sha256";
-    fpUrl.search = "";
-    const res = await fetch(fpUrl);
+    const res = await fetch(endpoint);
     if (!res.ok) return undefined;
     const hex = (await res.text()).trim().replace(/[:\s]/g, "");
     if (!/^[0-9a-fA-F]{64}$/.test(hex)) return undefined;
