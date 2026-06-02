@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import SmelterStats from "./tools/SmelterStats.tsx";
 import WhipStreamer from "./tools/WhipStreamer.tsx";
 import WhepPlayer from "./tools/WhepPlayer.tsx";
+import MoqStreamer from "./tools/MoqStreamer.tsx";
 import WavInspector from "./tools/WavInspector.tsx";
 
 const TOOLS = [
@@ -21,6 +22,12 @@ const TOOLS = [
     id: "whep-player",
     name: "WHEP Player",
     description: "Receive and play a stream via WebRTC WHEP",
+    scrollable: false,
+  },
+  {
+    id: "moq-streamer",
+    name: "MoQ Streamer",
+    description: "Publish camera or screen as H264 + AAC over Media-over-QUIC",
     scrollable: false,
   },
   {
@@ -63,6 +70,8 @@ function ToolPage({ id, params }: { id: ToolId; params: URLSearchParams }) {
       return <WhipStreamer params={params} />;
     case "whep-player":
       return <WhepPlayer params={params} />;
+    case "moq-streamer":
+      return <MoqStreamer params={params} />;
     case "wav-inspector":
       return <WavInspector params={params} />;
   }
