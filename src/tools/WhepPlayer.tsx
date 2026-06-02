@@ -87,7 +87,7 @@ export default function WhepPlayer({ params }: { params: URLSearchParams }) {
           historyKey="whep:url"
           value={url}
           onChange={setUrl}
-          placeholder="http://localhost:8080/whep/..."
+          placeholder="http://localhost:9000/whep/..."
           label="WHEP Endpoint URL"
         />
         <SuggestInput
