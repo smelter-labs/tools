@@ -517,7 +517,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
           historyKey="whip:url"
           value={url}
           onChange={setUrl}
-          placeholder="http://localhost:8080/whip/..."
+          placeholder="http://localhost:9000/whip/..."
           label="WHIP Endpoint URL"
         />
         <SuggestInput
