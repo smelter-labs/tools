@@ -61,7 +61,7 @@ interface StatsReport {
 type InputStatsReport =
   | { type: "rtp" | "whip" | "whep"; video_rtp: RtpTrack; audio_rtp: RtpTrack }
   | { type: "hls"; video: HlsTrack; audio: HlsTrack }
-  | { type: "rtmp" | "mp4"; video: TrackBitrate; audio: TrackBitrate };
+  | { type: "rtmp" | "mp4" | "moq_server"; video: TrackBitrate; audio: TrackBitrate };
 
 type OutputStatsReport =
   | { type: "whep"; video: TrackBitrate; audio: TrackBitrate; connected_peers: number }
@@ -79,6 +79,7 @@ function getInputTracks(r: InputStatsReport): { video: TrackBitrate; audio: Trac
     case "hls":
     case "rtmp":
     case "mp4":
+    case "moq_server":
       return { video: r.video, audio: r.audio };
   }
 }
