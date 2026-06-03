@@ -58,13 +58,13 @@ export interface PublishOptions {
   audio: boolean;
   wsFallback: boolean;
   /**
-   * TESTING ONLY. Exact endpoint that serves the relay's self-signed cert
-   * sha-256 fingerprint (hex). When set and reachable, the fingerprint is
-   * pinned via `serverCertificateHashes`, making WebTransport skip CA-chain
-   * verification for that cert. If empty/unset, or the fetch fails, connect
-   * falls back to standard TLS verification. NEVER use in production.
+   * TESTING ONLY. The relay's self-signed cert sha-256 fingerprint as a raw
+   * hex string. When set and valid, the fingerprint is pinned via
+   * `serverCertificateHashes`, making WebTransport skip CA-chain verification
+   * for that cert. If empty/unset, or the hex is invalid, connect falls back to
+   * standard TLS verification. NEVER use in production.
    */
-  certHashUrl?: string;
+  certHash?: string;
   onStatus?: (status: PublishStatus) => void;
 }
 
@@ -408,10 +408,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     const serverUrl = new URL(opts.serverUrl);
     const props: Net.Connection.ConnectProps = {};
     if (opts.wsFallback) props.websocket = { enabled: true };
-    if (opts.certHashUrl) {
+    if (opts.certHash) {
       // TESTING ONLY: bypass CA verification by pinning the relay's cert hash.
-      // On any failure we leave props untouched -> standard TLS verification.
-      const certHashes = await fetchCertHashes(opts.certHashUrl);
+      // On invalid hex we leave props untouched -> standard TLS verification.
+      const certHashes = parseCertHashes(opts.certHash);
       if (certHashes) props.webtransport = { serverCertificateHashes: certHashes };
     }
     conn = await Net.Connection.connect(
@@ -542,26 +542,18 @@ function closeEncoder(encoder: VideoEncoder | AudioEncoder) {
 }
 
 /**
- * TESTING ONLY. Fetches the relay's self-signed cert sha-256 fingerprint from
- * the exact `endpoint` URL and returns it as a `serverCertificateHashes` entry.
- * Pinning the hash makes WebTransport skip CA-chain verification for that cert.
- * Returns undefined if the fingerprint can't be fetched/parsed (so connect
- * falls back to normal verification rather than silently failing).
+ * TESTING ONLY. Parses the relay's self-signed cert sha-256 fingerprint from a
+ * raw hex string and returns it as a `serverCertificateHashes` entry. Pinning
+ * the hash makes WebTransport skip CA-chain verification for that cert. Returns
+ * undefined if the hex is invalid (so connect falls back to normal verification
+ * rather than silently failing).
  */
-async function fetchCertHashes(
-  endpoint: string,
-): Promise<WebTransportHash[] | undefined> {
-  try {
-    const res = await fetch(endpoint);
-    if (!res.ok) return undefined;
-    const hex = (await res.text()).trim().replace(/[:\s]/g, "");
-    if (!/^[0-9a-fA-F]{64}$/.test(hex)) return undefined;
-    const value = new Uint8Array(new ArrayBuffer(32));
-    for (let i = 0; i < 32; i++) {
-      value[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    }
-    return [{ algorithm: "sha-256", value }];
-  } catch {
-    return undefined;
+function parseCertHashes(hash: string): WebTransportHash[] | undefined {
+  const hex = hash.trim().replace(/[:\s]/g, "");
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) return undefined;
+  const value = new Uint8Array(new ArrayBuffer(32));
+  for (let i = 0; i < 32; i++) {
+    value[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   }
+  return [{ algorithm: "sha-256", value }];
 }

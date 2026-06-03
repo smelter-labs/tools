@@ -16,9 +16,9 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
 export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
   const [broadcastPath, setBroadcastPath] = useSessionInput("moq:path", params, "path");
-  // TESTING ONLY: exact endpoint serving the relay's self-signed cert sha-256
-  // fingerprint. Empty or unreachable -> standard TLS verification.
-  const [certHashUrl, setCertHashUrl] = useSessionInput("moq:cert", params, "cert");
+  // TESTING ONLY: the relay's self-signed cert sha-256 fingerprint as raw hex.
+  // Empty or invalid -> standard TLS verification.
+  const [certHash, setCertHash] = useSessionInput("moq:cert", params, "cert");
   const [source, setSource] = useState<SourceKind>("screen");
   const [audio, setAudio] = useState(true);
   const [wsFallback, setWsFallback] = useState(false);
@@ -52,7 +52,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
     saveToHistory("moq:path", broadcastPath);
-    if (certHashUrl) saveToHistory("moq:cert", certHashUrl);
+    if (certHash) saveToHistory("moq:cert", certHash);
     try {
       const handle = await startPublishing({
         serverUrl,
@@ -60,7 +60,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         source,
         audio,
         wsFallback,
-        certHashUrl,
+        certHash,
         onStatus: setStatus,
       });
       handleRef.current = handle;
@@ -113,10 +113,10 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         />
         <SuggestInput
           historyKey="moq:cert"
-          value={certHashUrl}
-          onChange={setCertHashUrl}
-          placeholder="http://localhost:8081/moq/certificate.sha256"
-          label="Cert fingerprint URL (optional)"
+          value={certHash}
+          onChange={setCertHash}
+          placeholder="a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+          label="Self-signed cert SHA-256 fingerprint (optional)"
         />
       </div>
 
