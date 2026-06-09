@@ -13,6 +13,58 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
   { value: "camera", label: "Camera" },
 ];
 
+const RESOLUTIONS: Record<string, { label: string; width?: number; height?: number }> = {
+  auto: { label: "Auto" },
+  "2160p": { label: "2160p (4K)", width: 3840, height: 2160 },
+  "1440p": { label: "1440p", width: 2560, height: 1440 },
+  "1080p": { label: "1080p", width: 1920, height: 1080 },
+  "720p": { label: "720p", width: 1280, height: 720 },
+  "480p": { label: "480p", width: 854, height: 480 },
+  "360p": { label: "360p", width: 640, height: 360 },
+};
+
+const FRAMERATES: Record<string, { label: string; fps?: number }> = {
+  auto: { label: "Auto" },
+  "60": { label: "60 fps", fps: 60 },
+  "30": { label: "30 fps", fps: 30 },
+  "24": { label: "24 fps", fps: 24 },
+  "15": { label: "15 fps", fps: 15 },
+};
+
+const CONTENT_HINTS: Record<string, { label: string; value?: MediaStreamTrack["contentHint"] }> = {
+  auto: { label: "Auto" },
+  motion: { label: "Motion (favor framerate)", value: "motion" },
+  detail: { label: "Detail (favor resolution)", value: "detail" },
+  text: { label: "Text (favor resolution)", value: "text" },
+};
+
+const VIDEO_BITRATES: Record<string, { label: string; bps?: number }> = {
+  auto: { label: "Auto" },
+  "25000": { label: "25 Mbps", bps: 25_000_000 },
+  "15000": { label: "15 Mbps", bps: 15_000_000 },
+  "8000": { label: "8 Mbps", bps: 8_000_000 },
+  "5000": { label: "5 Mbps", bps: 5_000_000 },
+  "2500": { label: "2.5 Mbps", bps: 2_500_000 },
+  "1000": { label: "1 Mbps", bps: 1_000_000 },
+  "500": { label: "500 kbps", bps: 500_000 },
+};
+
+const AUDIO_BITRATES: Record<string, { label: string; bps?: number }> = {
+  auto: { label: "Auto" },
+  "256": { label: "256 kbps", bps: 256_000 },
+  "192": { label: "192 kbps", bps: 192_000 },
+  "128": { label: "128 kbps", bps: 128_000 },
+  "96": { label: "96 kbps", bps: 96_000 },
+  "64": { label: "64 kbps", bps: 64_000 },
+  "32": { label: "32 kbps", bps: 32_000 },
+};
+
+function selectOptions<T extends { label: string }>(
+  rec: Record<string, T>,
+): { value: string; label: string }[] {
+  return Object.entries(rec).map(([value, { label }]) => ({ value, label }));
+}
+
 export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
   const [broadcastPath, setBroadcastPath] = useSessionInput("moq:path", params, "path");
@@ -22,6 +74,11 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [source, setSource] = useState<SourceKind>("screen");
   const [audio, setAudio] = useState(true);
   const [wsFallback, setWsFallback] = useState(false);
+  const [resolution, setResolution] = useState<string>("auto");
+  const [framerate, setFramerate] = useState<string>("auto");
+  const [videoBitrate, setVideoBitrate] = useState<string>("auto");
+  const [audioBitrate, setAudioBitrate] = useState<string>("auto");
+  const [contentHint, setContentHint] = useState<string>("auto");
 
   const [status, setStatus] = useState<PublishStatus>({ state: "stopped" });
   const [busy, setBusy] = useState(false);
@@ -60,6 +117,12 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         source,
         audio,
         wsFallback,
+        videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
+        audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
+        framerate: FRAMERATES[framerate]?.fps,
+        width: RESOLUTIONS[resolution]?.width,
+        height: RESOLUTIONS[resolution]?.height,
+        contentHint: CONTENT_HINTS[contentHint]?.value,
         certHash,
         onStatus: setStatus,
       });
@@ -130,31 +193,75 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           flexShrink: 0,
         }}
       >
-        <SourceSelect
-          label="Source"
-          value={source}
-          options={SOURCE_OPTIONS}
-          onChange={setSource}
-          disabled={disabled}
-        />
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            flex: 1,
-            minWidth: 200,
-          }}
-        >
-          <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Options</span>
-          <Checkbox label="Include audio" checked={audio} onChange={setAudio} disabled={disabled} />
-          <Checkbox
-            label="Enable WebSocket fallback"
-            checked={wsFallback}
-            onChange={setWsFallback}
+        <OptionGroup label="Video">
+          <SourceSelect
+            label="Source"
+            value={source}
+            options={SOURCE_OPTIONS}
+            onChange={setSource}
             disabled={disabled}
           />
-        </div>
+          <SourceSelect
+            label="Resolution"
+            value={resolution}
+            options={selectOptions(RESOLUTIONS)}
+            onChange={setResolution}
+            disabled={disabled}
+          />
+          <SourceSelect
+            label="Framerate"
+            value={framerate}
+            options={selectOptions(FRAMERATES)}
+            onChange={setFramerate}
+            disabled={disabled}
+          />
+          <SourceSelect
+            label="Max bitrate"
+            value={videoBitrate}
+            options={selectOptions(VIDEO_BITRATES)}
+            onChange={setVideoBitrate}
+            disabled={disabled}
+          />
+          <SourceSelect
+            label="Content hint"
+            value={contentHint}
+            options={selectOptions(CONTENT_HINTS)}
+            onChange={setContentHint}
+            disabled={disabled}
+          />
+        </OptionGroup>
+        <OptionGroup label="Audio">
+          <SourceSelect
+            label="Max bitrate"
+            value={audioBitrate}
+            options={selectOptions(AUDIO_BITRATES)}
+            onChange={setAudioBitrate}
+            disabled={disabled}
+          />
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Options</span>
+            <Checkbox
+              label="Include audio"
+              checked={audio}
+              onChange={setAudio}
+              disabled={disabled}
+            />
+            <Checkbox
+              label="Enable WebSocket fallback"
+              checked={wsFallback}
+              onChange={setWsFallback}
+              disabled={disabled}
+            />
+          </div>
+        </OptionGroup>
       </div>
 
       <div
@@ -231,6 +338,36 @@ function StatusLine({ status }: { status: PublishStatus }) {
   }
 
   return <span style={{ fontSize: "0.9rem", fontWeight: 500, color }}>{text}</span>;
+}
+
+function OptionGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <fieldset
+      style={{
+        flex: 1,
+        minWidth: 280,
+        border: "1px solid var(--border, #444)",
+        borderRadius: 6,
+        padding: "0.5rem 1rem 1rem",
+        margin: 0,
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "1rem",
+        alignItems: "flex-start",
+      }}
+    >
+      <legend
+        style={{
+          padding: "0 0.5rem",
+          fontSize: "0.85rem",
+          color: "var(--text-muted)",
+        }}
+      >
+        {label}
+      </legend>
+      {children}
+    </fieldset>
+  );
 }
 
 function Checkbox({
