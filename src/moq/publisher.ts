@@ -12,6 +12,18 @@ import * as Cmaf from "./cmaf";
 
 export type SourceKind = "camera" | "screen";
 
+// Audio source constants. The audio source is a string: one of these sentinels
+// or a concrete device id.
+const NONE = "none";
+const SCREEN = "screen";
+const MICROPHONE = "microphone";
+
+export type AudioProcessing = {
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+};
+
 // Plain shape of the catalog we publish. Mirrors @moq/hang's RootSchema but
 // uses plain numbers (the schema's branded `u53` numbers reject plain literals
 // at the type level; the JSON we emit is identical and re-validated on consume).
@@ -55,7 +67,9 @@ export interface PublishOptions {
   serverUrl: string;
   broadcastPath: string;
   source: SourceKind;
-  audio: boolean;
+  /** Audio source: NONE / SCREEN / MICROPHONE sentinel, or a concrete device id. */
+  audioSource: string;
+  audioProcessing: AudioProcessing;
   wsFallback: boolean;
   /**
    * Encoder/capture overrides. `undefined` means "auto" — fall back to the
@@ -135,6 +149,31 @@ const AUDIO_BITRATE = 128_000;
 const FRAMERATE = 30;
 const KEYFRAME_INTERVAL_US = 2_000_000; // keyframe every ~2s
 
+function audioConstraints(processing: AudioProcessing): MediaTrackConstraints {
+  return {
+    echoCancellation: processing.echoCancellation,
+    noiseSuppression: processing.noiseSuppression,
+    autoGainControl: processing.autoGainControl,
+  };
+}
+
+async function getAudioTrack(
+  source: string,
+  processing: AudioProcessing,
+): Promise<MediaStreamTrack | null> {
+  if (source === NONE) return null;
+  if (source === SCREEN) {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    s.getVideoTracks().forEach((t) => t.stop());
+    return s.getAudioTracks()[0] ?? null;
+  }
+  const proc = audioConstraints(processing);
+  const constraint: MediaTrackConstraints =
+    source === MICROPHONE ? { ...proc } : { deviceId: { exact: source }, ...proc };
+  const s = await navigator.mediaDevices.getUserMedia({ audio: constraint });
+  return s.getAudioTracks()[0] ?? null;
+}
+
 export async function startPublishing(opts: PublishOptions): Promise<PublishHandle> {
   const status = (s: PublishStatus) => opts.onStatus?.(s);
 
@@ -143,21 +182,43 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   if (opts.width !== undefined) videoConstraints.width = { ideal: opts.width };
   if (opts.height !== undefined) videoConstraints.height = { ideal: opts.height };
   if (opts.framerate !== undefined) videoConstraints.frameRate = { ideal: opts.framerate };
-  const constraints: MediaStreamConstraints = {
-    video: Object.keys(videoConstraints).length ? videoConstraints : true,
-    audio: opts.audio,
-  };
-  const stream =
-    opts.source === "screen"
-      ? await navigator.mediaDevices.getDisplayMedia(constraints)
-      : await navigator.mediaDevices.getUserMedia(constraints);
+  const video: MediaTrackConstraints | boolean = Object.keys(videoConstraints).length
+    ? videoConstraints
+    : true;
 
-  const videoTrackIn = stream.getVideoTracks()[0];
-  if (videoTrackIn && opts.contentHint) videoTrackIn.contentHint = opts.contentHint;
-  const audioTrackIn = opts.audio ? stream.getAudioTracks()[0] : undefined;
-  // If the user asked for audio but the source has none (e.g. screenshare
-  // without audio), treat audio as disabled so the catalog stays consistent.
+  let videoTrackIn: MediaStreamTrack | undefined;
+  let audioTrackIn: MediaStreamTrack | undefined;
+  if (opts.source === "screen" && opts.audioSource === SCREEN) {
+    // Combined screen path: one getDisplayMedia prompt yields both tracks,
+    // avoiding a second screen-share prompt for screen audio.
+    const s = await navigator.mediaDevices.getDisplayMedia({ video, audio: true });
+    videoTrackIn = s.getVideoTracks()[0];
+    audioTrackIn = s.getAudioTracks()[0];
+  } else {
+    const [vTrack, aTrack] = await Promise.all([
+      opts.source === "screen"
+        ? navigator.mediaDevices.getDisplayMedia({ video }).then((s) => s.getVideoTracks()[0])
+        : navigator.mediaDevices.getUserMedia({ video }).then((s) => s.getVideoTracks()[0]),
+      getAudioTrack(opts.audioSource, opts.audioProcessing),
+    ]);
+    videoTrackIn = vTrack;
+    audioTrackIn = aTrack ?? undefined;
+  }
+
+  if (!videoTrackIn) {
+    audioTrackIn?.stop();
+    throw new Error("No video track captured.");
+  }
+  if (opts.contentHint) videoTrackIn.contentHint = opts.contentHint;
+  // Naturally false when audioSource === NONE (getAudioTrack returns null), or
+  // when the chosen source yielded no audio track.
   const audioEnabled = !!audioTrackIn;
+
+  // Held tracks, used for preview and cleanup (they may come from separate
+  // source streams).
+  const previewStream = new MediaStream();
+  previewStream.addTrack(videoTrackIn);
+  if (audioTrackIn) previewStream.addTrack(audioTrackIn);
 
   if (audioEnabled) {
     const support = await AudioEncoder.isConfigSupported({
@@ -167,7 +228,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
     });
     if (!support.supported) {
-      stream.getTracks().forEach((t) => t.stop());
+      previewStream.getTracks().forEach((t) => t.stop());
       throw new Error(
         "AAC encoding (mp4a.40.2) is not supported in this browser. Use Chrome, or disable audio.",
       );
@@ -445,7 +506,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       Object.keys(props).length ? props : undefined,
     );
   } catch (e) {
-    stream.getTracks().forEach((t) => t.stop());
+    previewStream.getTracks().forEach((t) => t.stop());
     closeEncoder(videoEncoder);
     if (audioEncoder) closeEncoder(audioEncoder);
     throw e instanceof Error ? e : new Error(String(e));
@@ -516,7 +577,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   // ---- 8. Handle / cleanup ------------------------------------------------
   const handle: PublishHandle = {
-    stream,
+    stream: previewStream,
     stop: async () => {
       if (stopped) return;
       stopped = true;
@@ -539,7 +600,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         /* ignore */
       }
 
-      stream.getTracks().forEach((t) => t.stop());
+      previewStream.getTracks().forEach((t) => t.stop());
 
       try {
         broadcast.close();

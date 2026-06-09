@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useState, useRef, useCallback, useEffect, type ReactNode } from "react";
 import { useSessionInput } from "../useSessionInput.ts";
 import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
 import {
@@ -6,7 +6,12 @@ import {
   type PublishHandle,
   type PublishStatus,
   type SourceKind,
+  type AudioProcessing,
 } from "../moq/publisher.ts";
+
+const NONE = "none";
+const SCREEN = "screen";
+const MICROPHONE = "microphone";
 
 const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
   { value: "screen", label: "Screen" },
@@ -72,7 +77,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   // Empty or invalid -> standard TLS verification.
   const [certHash, setCertHash] = useSessionInput("moq:cert", params, "cert");
   const [source, setSource] = useState<SourceKind>("screen");
-  const [audio, setAudio] = useState(true);
+  const [audioSource, setAudioSource] = useState<string>(NONE);
+  const [audioProcessing, setAudioProcessing] = useState<AudioProcessing>({
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  });
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [wsFallback, setWsFallback] = useState(false);
   const [resolution, setResolution] = useState<string>("auto");
   const [framerate, setFramerate] = useState<string>("auto");
@@ -86,6 +97,30 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const handleRef = useRef<PublishHandle | null>(null);
+
+  const refreshDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setAudioDevices(devices.filter((d) => d.kind === "audioinput"));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshDevices();
+    navigator.mediaDevices.addEventListener("devicechange", refreshDevices);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
+  }, [refreshDevices]);
+
+  const namedAudioDevices = audioDevices.filter((d) => d.deviceId && d.label);
+  const audioOptions = [
+    { value: NONE, label: "None" },
+    { value: SCREEN, label: "Screen audio" },
+    ...(namedAudioDevices.length > 0
+      ? namedAudioDevices.map((d) => ({ value: d.deviceId, label: d.label }))
+      : [{ value: MICROPHONE, label: "Microphone" }]),
+  ];
 
   const stop = async () => {
     const handle = handleRef.current;
@@ -115,7 +150,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         serverUrl,
         broadcastPath,
         source,
-        audio,
+        audioSource,
+        audioProcessing,
         wsFallback,
         videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
         audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
@@ -128,6 +164,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       });
       handleRef.current = handle;
       setRunning(true);
+      // Populate device labels for the next run now that we hold a permission grant.
+      refreshDevices();
       if (videoRef.current) {
         videoRef.current.srcObject = handle.stream;
         videoRef.current.play().catch(() => { });
@@ -232,6 +270,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         </OptionGroup>
         <OptionGroup label="Audio">
           <SourceSelect
+            label="Source"
+            value={audioSource}
+            options={audioOptions}
+            onChange={setAudioSource}
+            disabled={disabled}
+          />
+          <SourceSelect
             label="Max bitrate"
             value={audioBitrate}
             options={selectOptions(AUDIO_BITRATES)}
@@ -247,21 +292,36 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
               minWidth: 200,
             }}
           >
-            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Options</span>
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Processing</span>
             <Checkbox
-              label="Include audio"
-              checked={audio}
-              onChange={setAudio}
+              label="Echo cancellation"
+              checked={audioProcessing.echoCancellation}
+              onChange={(v) => setAudioProcessing((p) => ({ ...p, echoCancellation: v }))}
               disabled={disabled}
             />
             <Checkbox
-              label="Enable WebSocket fallback"
-              checked={wsFallback}
-              onChange={setWsFallback}
+              label="Noise suppression"
+              checked={audioProcessing.noiseSuppression}
+              onChange={(v) => setAudioProcessing((p) => ({ ...p, noiseSuppression: v }))}
+              disabled={disabled}
+            />
+            <Checkbox
+              label="Auto gain control"
+              checked={audioProcessing.autoGainControl}
+              onChange={(v) => setAudioProcessing((p) => ({ ...p, autoGainControl: v }))}
               disabled={disabled}
             />
           </div>
         </OptionGroup>
+      </div>
+
+      <div style={{ marginBottom: "1rem", flexShrink: 0 }}>
+        <Checkbox
+          label="Enable WebSocket fallback"
+          checked={wsFallback}
+          onChange={setWsFallback}
+          disabled={disabled}
+        />
       </div>
 
       <div
