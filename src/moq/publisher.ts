@@ -58,6 +58,23 @@ export interface PublishOptions {
   audio: boolean;
   wsFallback: boolean;
   /**
+   * Encoder/capture overrides. `undefined` means "auto" — fall back to the
+   * hardcoded defaults below (and capture-derived dimensions).
+   */
+  videoBitrate?: number;
+  audioBitrate?: number;
+  framerate?: number;
+  width?: number;
+  height?: number;
+  /**
+   * Capture-track content hint (`MediaStreamTrack.contentHint`). Biases the
+   * encoder's quality trade-off: "motion" favors temporal (framerate) quality,
+   * "detail"/"text" favor spatial (resolution) quality. Empty/unset leaves it
+   * at the browser default. This is the WebCodecs-path analogue of WHIP's
+   * WebRTC degradation preference.
+   */
+  contentHint?: MediaStreamTrack["contentHint"];
+  /**
    * TESTING ONLY. The relay's self-signed cert sha-256 fingerprint as a raw
    * hex string. When set and valid, the fingerprint is pinned via
    * `serverCertificateHashes`, making WebTransport skip CA-chain verification
@@ -122,13 +139,21 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   const status = (s: PublishStatus) => opts.onStatus?.(s);
 
   // ---- 1. Capture ---------------------------------------------------------
-  const constraints: MediaStreamConstraints = { video: true, audio: opts.audio };
+  const videoConstraints: MediaTrackConstraints = {};
+  if (opts.width !== undefined) videoConstraints.width = { ideal: opts.width };
+  if (opts.height !== undefined) videoConstraints.height = { ideal: opts.height };
+  if (opts.framerate !== undefined) videoConstraints.frameRate = { ideal: opts.framerate };
+  const constraints: MediaStreamConstraints = {
+    video: Object.keys(videoConstraints).length ? videoConstraints : true,
+    audio: opts.audio,
+  };
   const stream =
     opts.source === "screen"
       ? await navigator.mediaDevices.getDisplayMedia(constraints)
       : await navigator.mediaDevices.getUserMedia(constraints);
 
   const videoTrackIn = stream.getVideoTracks()[0];
+  if (videoTrackIn && opts.contentHint) videoTrackIn.contentHint = opts.contentHint;
   const audioTrackIn = opts.audio ? stream.getAudioTracks()[0] : undefined;
   // If the user asked for audio but the source has none (e.g. screenshare
   // without audio), treat audio as disabled so the catalog stays consistent.
@@ -139,7 +164,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       codec: AUDIO_CODEC,
       sampleRate: 48000,
       numberOfChannels: 2,
-      bitrate: AUDIO_BITRATE,
+      bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
     });
     if (!support.supported) {
       stream.getTracks().forEach((t) => t.stop());
@@ -332,15 +357,16 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         const frame = value;
         try {
           if (videoEncoder.state === "unconfigured") {
+            const fps = opts.framerate ?? FRAMERATE;
             videoW = frame.codedWidth;
             videoH = frame.codedHeight;
-            videoCodec = avcCodecString(videoW, videoH, FRAMERATE);
+            videoCodec = avcCodecString(videoW, videoH, fps);
             videoEncoder.configure({
               codec: videoCodec,
               width: frame.codedWidth,
               height: frame.codedHeight,
-              bitrate: VIDEO_BITRATE,
-              framerate: FRAMERATE,
+              bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
+              framerate: fps,
               latencyMode: "realtime",
               avc: { format: "avc" },
             });
@@ -384,7 +410,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
                 codec: AUDIO_CODEC,
                 sampleRate: audioSampleRate,
                 numberOfChannels: audioChannels,
-                bitrate: AUDIO_BITRATE,
+                bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
               });
             }
             if (audioEncoder.state === "configured") {
@@ -407,7 +433,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   try {
     const serverUrl = new URL(opts.serverUrl);
     const props: Net.Connection.ConnectProps = {};
-    if (opts.wsFallback) props.websocket = { enabled: true };
+    if (!opts.wsFallback) props.websocket = { enabled: false };
     if (opts.certHash) {
       // TESTING ONLY: bypass CA verification by pinning the relay's cert hash.
       // On invalid hex we leave props untouched -> standard TLS verification.
