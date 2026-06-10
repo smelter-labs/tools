@@ -7,6 +7,7 @@ import {
   type PublishStatus,
   type SourceKind,
   type AudioProcessing,
+  type AudioCodec,
 } from "../moq/publisher.ts";
 
 const NONE = "none";
@@ -16,6 +17,11 @@ const MICROPHONE = "microphone";
 const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
   { value: "screen", label: "Screen" },
   { value: "camera", label: "Camera" },
+];
+
+const AUDIO_CODECS: { value: AudioCodec; label: string }[] = [
+  { value: "opus", label: "Opus" },
+  { value: "aac", label: "AAC" },
 ];
 
 const RESOLUTIONS: Record<string, { label: string; width?: number; height?: number }> = {
@@ -89,6 +95,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [framerate, setFramerate] = useState<string>("auto");
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
+  const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
   const [contentHint, setContentHint] = useState<string>("auto");
 
   const [status, setStatus] = useState<PublishStatus>({ state: "stopped" });
@@ -152,6 +159,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         source,
         audioSource,
         audioProcessing,
+        audioCodec,
         wsFallback,
         videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
         audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
@@ -274,6 +282,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             value={audioSource}
             options={audioOptions}
             onChange={setAudioSource}
+            disabled={disabled}
+          />
+          <SourceSelect
+            label="Codec"
+            value={audioCodec}
+            options={AUDIO_CODECS}
+            onChange={setAudioCodec}
             disabled={disabled}
           />
           <SourceSelect
