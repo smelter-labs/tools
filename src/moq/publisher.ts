@@ -1,6 +1,7 @@
 // Hand-rolled MoQ publisher: capture -> WebCodecs encode -> CMAF fragment ->
 // @moq/net track publish. We avoid the high-level @moq/publish API because it
-// hardcodes Opus audio and a "legacy" container; we require H264 + AAC + CMAF.
+// hardcodes a "legacy" container; we require H264 + CMAF. Audio codec is
+// selectable (AAC or Opus); the container is always CMAF.
 //
 // Publish model (confirmed in @moq/net broadcast.js + the @moq/publish serve
 // loop in screen-CAGDqnB8.js:1576): it is PULL-based. We create a Broadcast,
@@ -11,6 +12,16 @@ import * as Catalog from "@moq/hang/catalog";
 import * as Cmaf from "./cmaf";
 
 export type SourceKind = "camera" | "screen";
+
+export type AudioCodec = "aac" | "opus";
+
+// Maps each selectable audio codec to the single codec string that drives both
+// WebCodecs (AudioEncoder.configure / isConfigSupported) and the CMAF init
+// segment + catalog rendition.
+const AUDIO_CODECS: Record<AudioCodec, string> = {
+  aac: "mp4a.40.2", // AAC-LC
+  opus: "opus",
+};
 
 // Audio source constants. The audio source is a string: one of these sentinels
 // or a concrete device id.
@@ -70,6 +81,8 @@ export interface PublishOptions {
   /** Audio source: NONE / SCREEN / MICROPHONE sentinel, or a concrete device id. */
   audioSource: string;
   audioProcessing: AudioProcessing;
+  /** Audio codec to encode/publish. Defaults to `"aac"` when unset. */
+  audioCodec?: AudioCodec;
   wsFallback: boolean;
   /**
    * Encoder/capture overrides. `undefined` means "auto" — fall back to the
@@ -143,7 +156,6 @@ function avcCodecString(width: number, height: number, framerate: number): strin
   const levelByte = match ? match[0] : AVC_LEVELS[AVC_LEVELS.length - 1][0];
   return `avc1.6400${levelByte.toString(16).padStart(2, "0")}`;
 }
-const AUDIO_CODEC = "mp4a.40.2"; // AAC-LC
 const VIDEO_BITRATE = 5_000_000;
 const AUDIO_BITRATE = 128_000;
 const FRAMERATE = 30;
@@ -176,6 +188,7 @@ async function getAudioTrack(
 
 export async function startPublishing(opts: PublishOptions): Promise<PublishHandle> {
   const status = (s: PublishStatus) => opts.onStatus?.(s);
+  const audioCodec = AUDIO_CODECS[opts.audioCodec ?? "aac"];
 
   // ---- 1. Capture ---------------------------------------------------------
   const videoConstraints: MediaTrackConstraints = {};
@@ -222,7 +235,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   if (audioEnabled) {
     const support = await AudioEncoder.isConfigSupported({
-      codec: AUDIO_CODEC,
+      codec: audioCodec,
       sampleRate: 48000,
       numberOfChannels: 2,
       bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
@@ -230,7 +243,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     if (!support.supported) {
       previewStream.getTracks().forEach((t) => t.stop());
       throw new Error(
-        "AAC encoding (mp4a.40.2) is not supported in this browser. Use Chrome, or disable audio.",
+        `Audio encoding (${audioCodec}) is not supported in this browser. Use Chrome, or disable audio.`,
       );
     }
   }
@@ -300,7 +313,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       root.audio = {
         renditions: {
           [TRACK_AUDIO]: {
-            codec: AUDIO_CODEC,
+            codec: audioCodec,
             container: { kind: "cmaf", init: audioInitB64, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID },
             sampleRate: audioSampleRate,
             numberOfChannels: audioChannels,
@@ -342,10 +355,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         try {
           if (!audioInitB64) {
             const desc = meta?.decoderConfig?.description;
-            const asc = desc ? Cmaf.toUint8(desc) : undefined;
+            // Opus needs the WebCodecs OpusHead converted to dOps layout; AAC's
+            // AudioSpecificConfig passes through unchanged (see helper).
+            const asc = desc ? audioDescriptionForCmaf(Cmaf.toUint8(desc), opts.audioCodec) : undefined;
             if (asc) audioDescHex = Cmaf.bytesToHex(asc);
             audioInitB64 = Cmaf.audioInitBase64({
-              codec: AUDIO_CODEC,
+              codec: audioCodec,
               sampleRate: audioSampleRate,
               numberOfChannels: audioChannels,
               asc,
@@ -468,7 +483,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
               audioSampleRate = sample.sampleRate;
               audioChannels = sample.numberOfChannels;
               audioEncoder.configure({
-                codec: AUDIO_CODEC,
+                codec: audioCodec,
                 sampleRate: audioSampleRate,
                 numberOfChannels: audioChannels,
                 bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
@@ -519,9 +534,13 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   // ---- 6. Serve loop (pull-based) ----------------------------------------
   const serveCatalog = (track: Net.Track) => {
     void (async () => {
-      await catalogReady;
-      if (stopped || track.state.closed.peek() || !catalog) return;
-      track.writeFrame(Catalog.encode(catalog as unknown as Catalog.Root));
+      try {
+        await catalogReady;
+        if (stopped || track.state.closed.peek() || !catalog) return;
+        track.writeFrame(Catalog.encode(catalog as unknown as Catalog.Root));
+      } catch (e) {
+        if (!stopped) fail(e);
+      }
     })();
   };
 
@@ -618,6 +637,45 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   };
 
   return handle;
+}
+
+// "OpusHead" magic signature: the 8 leading bytes of the Ogg-style Opus
+// identification header that WebCodecs reports as the decoder description.
+const OPUS_HEAD_MAGIC = [0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64];
+
+/**
+ * Adapt the WebCodecs audio decoder description into what the CMAF builder's
+ * dOps box expects for Opus, leaving AAC untouched.
+ *
+ * WebCodecs hands Opus back an Ogg-style OpusHead: an 8-byte "OpusHead" magic,
+ * then a body that begins with OpusHead version `1` and stores PreSkip /
+ * InputSampleRate / OutputGain little-endian. The ISO-BMFF dOps box instead
+ * wants Version `0` and those fields big-endian (and no magic). `createDOpsBox`
+ * embeds whatever bytes we pass verbatim, so we convert here; otherwise the
+ * parser trips on "unknown version: 1". If the description isn't a recognizable
+ * OpusHead we return undefined and let the builder synthesize a valid dOps.
+ */
+function audioDescriptionForCmaf(
+  desc: Uint8Array,
+  codec: AudioCodec | undefined,
+): Uint8Array | undefined {
+  if (codec !== "opus") return desc;
+  const HEAD = OPUS_HEAD_MAGIC.length;
+  // magic + version + channels + preSkip(2) + sampleRate(4) + gain(2) + family(1)
+  if (desc.length < HEAD + 11) return undefined;
+  if (!OPUS_HEAD_MAGIC.every((b, i) => desc[i] === b)) return undefined;
+  const body = desc.subarray(HEAD);
+  const out = new Uint8Array(body); // copy; channelMappingFamily + table copied as-is
+  out[0] = 0; // dOps Version (OpusHead's is 1)
+  out[2] = body[3]; // PreSkip: LE -> BE
+  out[3] = body[2];
+  out[4] = body[7]; // InputSampleRate: LE -> BE
+  out[5] = body[6];
+  out[6] = body[5];
+  out[7] = body[4];
+  out[8] = body[9]; // OutputGain: LE -> BE
+  out[9] = body[8];
+  return out;
 }
 
 function closeEncoder(encoder: VideoEncoder | AudioEncoder) {
