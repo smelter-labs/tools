@@ -77,6 +77,8 @@ interface CatalogRoot {
 export interface PublishOptions {
   serverUrl: string;
   broadcastPath: string;
+  /** Bearer token appended to the server URL as a `?token=` query param. */
+  token?: string;
   source: SourceKind;
   /** Audio source: NONE / SCREEN / MICROPHONE sentinel, or a concrete device id. */
   audioSource: string;
@@ -509,6 +511,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let certHashPinned = false;
   try {
     const serverUrl = new URL(opts.serverUrl);
+    if (opts.token) serverUrl.searchParams.set("token", opts.token);
     const props: Net.Connection.ConnectProps = {};
     if (!opts.wsFallback) props.websocket = { enabled: false };
     if (opts.certHash) {

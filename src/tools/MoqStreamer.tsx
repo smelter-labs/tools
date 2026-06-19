@@ -78,7 +78,8 @@ function selectOptions<T extends { label: string }>(
 
 export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
-  const [broadcastPath, setBroadcastPath] = useSessionInput("moq:path", params, "path");
+  const [token, setToken] = useSessionInput("moq:token", params, "token");
+  const broadcastPath = "test";
   // TESTING ONLY: the relay's self-signed cert sha-256 fingerprint as raw hex.
   // Empty or invalid -> standard TLS verification.
   const [certHash, setCertHash] = useSessionInput("moq:cert", params, "cert");
@@ -150,12 +151,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
     setBusy(true);
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
-    saveToHistory("moq:path", broadcastPath);
+    if (token) saveToHistory("moq:token", token);
     if (certHash) saveToHistory("moq:cert", certHash);
     try {
       const handle = await startPublishing({
         serverUrl,
         broadcastPath,
+        token,
         source,
         audioSource,
         audioProcessing,
@@ -214,11 +216,11 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           label="Server URL"
         />
         <SuggestInput
-          historyKey="moq:path"
-          value={broadcastPath}
-          onChange={setBroadcastPath}
-          placeholder="test"
-          label="Broadcast path"
+          historyKey="moq:token"
+          value={token}
+          onChange={setToken}
+          placeholder="bearer token"
+          label="Bearer token"
         />
         <SuggestInput
           historyKey="moq:cert"
