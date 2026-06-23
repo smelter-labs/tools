@@ -11,9 +11,12 @@ importers:
       '@moq/hang':
         specifier: ^0.2.7
         version: 0.2.7(@svta/cml-utils@1.5.0)(@types/react@19.2.14)(react@19.2.4)
-      '@moq/net':
+      '@moq/msf':
         specifier: ^0.1.2
-        version: 0.1.2(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)
+        version: 0.1.2(@types/react@19.2.14)(react@19.2.4)
+      '@moq/net':
+        specifier: ^0.1.5
+        version: 0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)
       react:
         specifier: ^19.0.0
         version: 19.2.4
@@ -389,8 +392,16 @@ packages:
   '@moq/loc@0.1.0':
     resolution: {integrity: sha512-8ouPBhoZU/vAaHCrcsi97zOw0BJX/rQbfUJ7Dx2/Cmao6c4knrAXl8EVjlwKM4HLjfa8xzPd4Lqxkfv7G4QyhA==}
 
+  '@moq/msf@0.1.2':
+    resolution: {integrity: sha512-gKkul97ILVBU18B1hVPzMoMZXjU9XyPgjgc3OJgF5Td+vznPQos9UsebIJXVPKlIG1e5p02HwNyvPT3kQ3c74g==}
+
   '@moq/net@0.1.2':
     resolution: {integrity: sha512-j8Eyu188n06RGWXIoarVFYPTWEq52WhdXVg3S0a3CGpXP0j5t0t2p9kUzUSgShdk4W6ItbvZ30mR+Ihwmuja0Q==}
+    peerDependencies:
+      zod: ^4.0.0
+
+  '@moq/net@0.1.5':
+    resolution: {integrity: sha512-JHt4KDEyhSw5cFiWzneTEBW/mFoLAQLLZJvCPieZvk+TL4RhqNjXS1NgzXs0ov3zMj3Ov67ziwZDBBIHf0mHow==}
     peerDependencies:
       zod: ^4.0.0
 
@@ -403,6 +414,20 @@ packages:
       '@types/react': ^19.1.8
       react: ^19.0.0
       solid-js: ^1.9.7
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
+        optional: true
+      solid-js:
+        optional: true
+
+  '@moq/signals@0.1.9':
+    resolution: {integrity: sha512-Jh3JncApYxJP1MGqtX6N5qaq4uu/46aLyyQ9BR5Kc+wdT8Gx89XP+/LS5mR3jJv2q0BT7jzHrloUWuQGdhXqow==}
+    peerDependencies:
+      '@types/react': ^19.2.15
+      react: ^19.0.0
+      solid-js: ^1.9.13
     peerDependenciesMeta:
       '@types/react':
         optional: true
@@ -1247,6 +1272,9 @@ packages:
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
 snapshots:
 
   '@babel/code-frame@7.29.0':
@@ -1538,6 +1566,15 @@ snapshots:
       - solid-js
       - zod
 
+  '@moq/msf@0.1.2(@types/react@19.2.14)(react@19.2.4)':
+    dependencies:
+      '@moq/net': 0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@types/react'
+      - react
+      - solid-js
+
   '@moq/net@0.1.2(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)':
     dependencies:
       '@moq/qmux': 0.0.6
@@ -1549,9 +1586,25 @@ snapshots:
       - react
       - solid-js
 
+  '@moq/net@0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)':
+    dependencies:
+      '@moq/qmux': 0.0.6
+      '@moq/signals': 0.1.9(@types/react@19.2.14)(react@19.2.4)
+      async-mutex: 0.5.0
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@types/react'
+      - react
+      - solid-js
+
   '@moq/qmux@0.0.6': {}
 
   '@moq/signals@0.1.7(@types/react@19.2.14)(react@19.2.4)':
+    optionalDependencies:
+      '@types/react': 19.2.14
+      react: 19.2.4
+
+  '@moq/signals@0.1.9(@types/react@19.2.14)(react@19.2.4)':
     optionalDependencies:
       '@types/react': 19.2.14
       react: 19.2.4
@@ -2343,3 +2396,5 @@ snapshots:
       zod: 4.3.6
 
   zod@4.3.6: {}
+
+  zod@4.4.3: {}

@@ -10,6 +10,7 @@
 // the track matching each subscription by name.
 import * as Net from "@moq/net";
 import * as Catalog from "@moq/hang/catalog";
+import * as Msf from "@moq/msf";
 import { Legacy } from "@moq/hang/container";
 import type { Time } from "@moq/net";
 import * as Cmaf from "./cmaf";
@@ -134,6 +135,7 @@ export interface PublishHandle {
 
 // Track names. The catalog rendition keys MUST match these.
 const TRACK_CATALOG = "catalog.json";
+const TRACK_CATALOG_MSF = "catalog";
 const TRACK_VIDEO = "video/hd";
 const TRACK_AUDIO = "audio/eng";
 
@@ -285,6 +287,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let audioChannels = 2;
 
   let catalog: CatalogRoot | null = null;
+  let msfCatalog: Msf.Catalog | null = null;
   let resolveCatalogReady!: () => void;
   const catalogReady = new Promise<void>((r) => (resolveCatalogReady = r));
 
@@ -342,7 +345,39 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       };
     }
 
+    // MSF catalog: the same track data as the hang catalog above, but as a flat
+    // `tracks[]` array. For CMAF the init segment (videoInitB64/audioInitB64) is
+    // the `initData`; legacy carries no init data in either catalog.
+    const msfVideo: Msf.Track = {
+      name: TRACK_VIDEO,
+      packaging: videoContainer,
+      isLive: true,
+      role: "video",
+      codec: videoCodec,
+      width: videoW,
+      height: videoH,
+      framerate: FRAMERATE,
+      bitrate: VIDEO_BITRATE,
+      initData: videoContainer === "cmaf" ? videoInitB64! : undefined,
+    };
+
+    const msfTracks: Msf.Track[] = [msfVideo];
+    if (audioEnabled) {
+      msfTracks.push({
+        name: TRACK_AUDIO,
+        packaging: audioContainer,
+        isLive: true,
+        role: "audio",
+        codec: audioCodec,
+        samplerate: audioSampleRate,
+        channelConfig: String(audioChannels),
+        bitrate: AUDIO_BITRATE,
+        initData: audioContainer === "cmaf" ? audioInitB64! : undefined,
+      });
+    }
+
     catalog = root;
+    msfCatalog = { version: 1, tracks: msfTracks };
     resolveCatalogReady();
   };
 
@@ -605,17 +640,26 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   status({ state: "publishing" });
 
   // ---- 6. Serve loop (pull-based) ----------------------------------------
-  const serveCatalog = (track: Net.Track) => {
+  // Both catalog tracks are pull-based: await the single catalogReady promise,
+  // then encode the requested flavor. `encodeBytes` is only called after the
+  // catalog state is populated, so its (non-null) reads are safe.
+  const serveCatalogTrack = (track: Net.Track, encodeBytes: () => Uint8Array) => {
     void (async () => {
       try {
         await catalogReady;
-        if (stopped || track.state.closed.peek() || !catalog) return;
-        track.writeFrame(Catalog.encode(catalog as unknown as Catalog.Root));
+        if (stopped || track.state.closed.peek() || !catalog || !msfCatalog) return;
+        track.writeFrame(encodeBytes());
       } catch (e) {
         if (!stopped) fail(e);
       }
     })();
   };
+
+  const serveCatalog = (track: Net.Track) =>
+    serveCatalogTrack(track, () => Catalog.encode(catalog as unknown as Catalog.Root));
+
+  const serveMsfCatalog = (track: Net.Track) =>
+    serveCatalogTrack(track, () => Msf.encode(msfCatalog!));
 
   void (async () => {
     try {
@@ -626,6 +670,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         switch (track.name) {
           case TRACK_CATALOG:
             serveCatalog(track);
+            break;
+          case TRACK_CATALOG_MSF:
+            serveMsfCatalog(track);
             break;
           case TRACK_VIDEO:
             videoOut = track;
@@ -812,7 +859,7 @@ function isCertHashError(err: Error): boolean {
  * undefined if the hex is invalid (so connect falls back to normal verification
  * rather than silently failing).
  */
-function parseCertHashes(hash: string): WebTransportHash[] | undefined {
+function parseCertHashes(hash: string): Net.Connection.CertificateHash[] | undefined {
   const hex = hash.trim().replace(/[:\s]/g, "");
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) return undefined;
   const value = new Uint8Array(new ArrayBuffer(32));
