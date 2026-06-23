@@ -8,6 +8,7 @@ import {
   type SourceKind,
   type AudioProcessing,
   type AudioCodec,
+  type ContainerKind,
 } from "../moq/publisher.ts";
 
 const NONE = "none";
@@ -22,6 +23,11 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
 const AUDIO_CODECS: { value: AudioCodec; label: string }[] = [
   { value: "opus", label: "Opus" },
   { value: "aac", label: "AAC" },
+];
+
+const CONTAINERS: { value: ContainerKind; label: string }[] = [
+  { value: "cmaf", label: "CMAF" },
+  { value: "legacy", label: "Legacy" },
 ];
 
 const RESOLUTIONS: Record<string, { label: string; width?: number; height?: number }> = {
@@ -97,6 +103,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
+  const [videoContainer, setVideoContainer] = useState<ContainerKind>("cmaf");
+  const [audioContainer, setAudioContainer] = useState<ContainerKind>("cmaf");
   const [contentHint, setContentHint] = useState<string>("auto");
 
   const [status, setStatus] = useState<PublishStatus>({ state: "stopped" });
@@ -162,6 +170,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         audioSource,
         audioProcessing,
         audioCodec,
+        videoContainer,
+        audioContainer,
         wsFallback,
         videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
         audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
@@ -277,6 +287,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             onChange={setContentHint}
             disabled={disabled}
           />
+          <SourceSelect
+            label="Container"
+            value={videoContainer}
+            options={CONTAINERS}
+            onChange={setVideoContainer}
+            disabled={disabled}
+          />
         </OptionGroup>
         <OptionGroup label="Audio">
           <SourceSelect
@@ -298,6 +315,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             value={audioBitrate}
             options={selectOptions(AUDIO_BITRATES)}
             onChange={setAudioBitrate}
+            disabled={disabled}
+          />
+          <SourceSelect
+            label="Container"
+            value={audioContainer}
+            options={CONTAINERS}
+            onChange={setAudioContainer}
             disabled={disabled}
           />
           <div

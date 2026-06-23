@@ -1,7 +1,8 @@
-// Hand-rolled MoQ publisher: capture -> WebCodecs encode -> CMAF fragment ->
+// Hand-rolled MoQ publisher: capture -> WebCodecs encode -> CMAF/Legacy frame ->
 // @moq/net track publish. We avoid the high-level @moq/publish API because it
-// hardcodes a "legacy" container; we require H264 + CMAF. Audio codec is
-// selectable (AAC or Opus); the container is always CMAF.
+// hardcodes a "legacy" container; we require H264 and want CMAF as the default.
+// Audio codec is selectable (AAC or Opus); the video and audio containers are
+// each selectable (CMAF or Legacy) and default to CMAF.
 //
 // Publish model (confirmed in @moq/net broadcast.js + the @moq/publish serve
 // loop in screen-CAGDqnB8.js:1576): it is PULL-based. We create a Broadcast,
@@ -9,11 +10,15 @@
 // the track matching each subscription by name.
 import * as Net from "@moq/net";
 import * as Catalog from "@moq/hang/catalog";
+import { Legacy } from "@moq/hang/container";
+import type { Time } from "@moq/net";
 import * as Cmaf from "./cmaf";
 
 export type SourceKind = "camera" | "screen";
 
 export type AudioCodec = "aac" | "opus";
+
+export type ContainerKind = "cmaf" | "legacy";
 
 // Maps each selectable audio codec to the single codec string that drives both
 // WebCodecs (AudioEncoder.configure / isConfigSupported) and the CMAF init
@@ -38,19 +43,16 @@ export type AudioProcessing = {
 // Plain shape of the catalog we publish. Mirrors @moq/hang's RootSchema but
 // uses plain numbers (the schema's branded `u53` numbers reject plain literals
 // at the type level; the JSON we emit is identical and re-validated on consume).
-interface CmafContainer {
-  kind: "cmaf";
-  init: string;
-  timescale: number;
-  trackId: number;
-}
+type Container =
+  | { kind: "cmaf"; init: string; timescale: number; trackId: number }
+  | { kind: "legacy" };
 interface CatalogRoot {
   video: {
     renditions: Record<
       string,
       {
         codec: string;
-        container: CmafContainer;
+        container: Container;
         codedWidth: number;
         codedHeight: number;
         framerate: number;
@@ -64,7 +66,7 @@ interface CatalogRoot {
       string,
       {
         codec: string;
-        container: CmafContainer;
+        container: Container;
         sampleRate: number;
         numberOfChannels: number;
         bitrate: number;
@@ -85,6 +87,10 @@ export interface PublishOptions {
   audioProcessing: AudioProcessing;
   /** Audio codec to encode/publish. Defaults to `"aac"` when unset. */
   audioCodec?: AudioCodec;
+  /** Video container. Defaults to "cmaf". */
+  videoContainer?: ContainerKind;
+  /** Audio container. Defaults to "cmaf". */
+  audioContainer?: ContainerKind;
   wsFallback: boolean;
   /**
    * Encoder/capture overrides. `undefined` means "auto" — fall back to the
@@ -191,6 +197,8 @@ async function getAudioTrack(
 export async function startPublishing(opts: PublishOptions): Promise<PublishHandle> {
   const status = (s: PublishStatus) => opts.onStatus?.(s);
   const audioCodec = AUDIO_CODECS[opts.audioCodec ?? "aac"];
+  const videoContainer = opts.videoContainer ?? "cmaf";
+  const audioContainer = opts.audioContainer ?? "cmaf";
 
   // ---- 1. Capture ---------------------------------------------------------
   const videoConstraints: MediaTrackConstraints = {};
@@ -268,6 +276,8 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let audioInitB64: string | null = null;
   let videoDescHex: string | null = null;
   let audioDescHex: string | null = null;
+  let videoCatalogReady = false;
+  let audioCatalogReady = false;
   let videoW = 0;
   let videoH = 0;
   let videoCodec = VIDEO_CODEC;
@@ -292,35 +302,41 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   const maybeBuildCatalog = () => {
     if (catalog) return;
-    if (!videoInitB64) return;
-    if (audioEnabled && !audioInitB64) return;
+    if (!videoCatalogReady) return;
+    if (audioEnabled && !audioCatalogReady) return;
 
     const root: CatalogRoot = {
       video: {
         renditions: {
           [TRACK_VIDEO]: {
             codec: videoCodec,
-            container: { kind: "cmaf", init: videoInitB64, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID },
+            container:
+              videoContainer === "cmaf"
+                ? { kind: "cmaf", init: videoInitB64!, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID }
+                : { kind: "legacy" },
             codedWidth: videoW,
             codedHeight: videoH,
             framerate: FRAMERATE,
             bitrate: VIDEO_BITRATE,
-            description: videoDescHex ?? undefined,
+            description: videoContainer === "cmaf" ? (videoDescHex ?? undefined) : undefined,
           },
         },
       },
     };
 
-    if (audioEnabled && audioInitB64) {
+    if (audioEnabled) {
       root.audio = {
         renditions: {
           [TRACK_AUDIO]: {
             codec: audioCodec,
-            container: { kind: "cmaf", init: audioInitB64, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID },
+            container:
+              audioContainer === "cmaf"
+                ? { kind: "cmaf", init: audioInitB64!, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID }
+                : { kind: "legacy" },
             sampleRate: audioSampleRate,
             numberOfChannels: audioChannels,
             bitrate: AUDIO_BITRATE,
-            description: audioDescHex ?? undefined,
+            description: audioContainer === "cmaf" ? (audioDescHex ?? undefined) : undefined,
           },
         },
       };
@@ -334,13 +350,22 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => {
       try {
-        const desc = meta?.decoderConfig?.description;
-        if (desc && !videoInitB64) {
-          const avcC = Cmaf.toUint8(desc);
-          videoDescHex = Cmaf.bytesToHex(avcC);
+        if (videoContainer === "cmaf") {
+          const desc = meta?.decoderConfig?.description;
+          if (desc && !videoInitB64) {
+            const avcC = Cmaf.toUint8(desc);
+            videoDescHex = Cmaf.bytesToHex(avcC);
+            videoW = meta?.decoderConfig?.codedWidth ?? videoW;
+            videoH = meta?.decoderConfig?.codedHeight ?? videoH;
+            videoInitB64 = Cmaf.videoInitBase64({ codedWidth: videoW, codedHeight: videoH, avcC });
+            videoCatalogReady = true;
+            maybeBuildCatalog();
+          }
+        } else if (!videoCatalogReady) {
+          // Legacy: Annex B carries SPS/PPS in-band, so there's no init/desc.
           videoW = meta?.decoderConfig?.codedWidth ?? videoW;
           videoH = meta?.decoderConfig?.codedHeight ?? videoH;
-          videoInitB64 = Cmaf.videoInitBase64({ codedWidth: videoW, codedHeight: videoH, avcC });
+          videoCatalogReady = true;
           maybeBuildCatalog();
         }
         writeVideoChunk(chunk);
@@ -355,18 +380,26 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     ? new AudioEncoder({
       output: (chunk, meta) => {
         try {
-          if (!audioInitB64) {
-            const desc = meta?.decoderConfig?.description;
-            // Opus needs the WebCodecs OpusHead converted to dOps layout; AAC's
-            // AudioSpecificConfig passes through unchanged (see helper).
-            const asc = desc ? audioDescriptionForCmaf(Cmaf.toUint8(desc), opts.audioCodec) : undefined;
-            if (asc) audioDescHex = Cmaf.bytesToHex(asc);
-            audioInitB64 = Cmaf.audioInitBase64({
-              codec: audioCodec,
-              sampleRate: audioSampleRate,
-              numberOfChannels: audioChannels,
-              asc,
-            });
+          if (audioContainer === "cmaf") {
+            if (!audioInitB64) {
+              const desc = meta?.decoderConfig?.description;
+              // Opus needs the WebCodecs OpusHead converted to dOps layout; AAC's
+              // AudioSpecificConfig passes through unchanged (see helper).
+              const asc = desc ? audioDescriptionForCmaf(Cmaf.toUint8(desc), opts.audioCodec) : undefined;
+              if (asc) audioDescHex = Cmaf.bytesToHex(asc);
+              audioInitB64 = Cmaf.audioInitBase64({
+                codec: audioCodec,
+                sampleRate: audioSampleRate,
+                numberOfChannels: audioChannels,
+                asc,
+              });
+              audioCatalogReady = true;
+              maybeBuildCatalog();
+            }
+          } else if (!audioCatalogReady) {
+            // Legacy: ADTS (AAC) and raw Opus packets are self-describing, so no
+            // init segment or description is needed.
+            audioCatalogReady = true;
             maybeBuildCatalog();
           }
           writeAudioChunk(chunk);
@@ -393,14 +426,17 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
-    const seg = Cmaf.dataSegment({
-      data,
-      timestampUs: chunk.timestamp,
-      durationUs: chunk.duration ?? 1_000_000 / FRAMERATE,
-      keyframe: isKey,
-      sequence: videoSeq++,
-    });
-    videoGroup.writeFrame(seg);
+    const frameBytes =
+      videoContainer === "cmaf"
+        ? Cmaf.dataSegment({
+          data,
+          timestampUs: chunk.timestamp,
+          durationUs: chunk.duration ?? 1_000_000 / FRAMERATE,
+          keyframe: isKey,
+          sequence: videoSeq++,
+        })
+        : Legacy.encodeFrame(data, chunk.timestamp as Time.Micro);
+    videoGroup.writeFrame(frameBytes);
   }
 
   function writeAudioChunk(chunk: EncodedAudioChunk) {
@@ -409,15 +445,18 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
-    const seg = Cmaf.dataSegment({
-      data,
-      timestampUs: chunk.timestamp,
-      durationUs: chunk.duration ?? 0,
-      keyframe: true, // every AAC frame is independently decodable
-      sequence: audioSeq++,
-    });
+    const frameBytes =
+      audioContainer === "cmaf"
+        ? Cmaf.dataSegment({
+          data,
+          timestampUs: chunk.timestamp,
+          durationUs: chunk.duration ?? 0,
+          keyframe: true, // every AAC frame is independently decodable
+          sequence: audioSeq++,
+        })
+        : Legacy.encodeFrame(data, chunk.timestamp as Time.Micro);
     // One group per audio frame keeps latency low and the consumer happy.
-    out.writeFrame(seg);
+    out.writeFrame(frameBytes);
   }
 
   // ---- 4. Capture -> encode loops ----------------------------------------
@@ -446,7 +485,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
               bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
               framerate: fps,
               latencyMode: "realtime",
-              avc: { format: "avc" },
+              avc: { format: videoContainer === "legacy" ? "annexb" : "avc" },
             });
           }
           const ts = frame.timestamp;
@@ -489,6 +528,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
                 sampleRate: audioSampleRate,
                 numberOfChannels: audioChannels,
                 bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
+                ...(opts.audioCodec === "aac" && audioContainer === "legacy"
+                  ? { aac: { format: "adts" } }
+                  : {}),
               });
             }
             if (audioEncoder.state === "configured") {
