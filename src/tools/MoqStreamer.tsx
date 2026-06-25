@@ -8,6 +8,7 @@ import {
   type SourceKind,
   type AudioProcessing,
   type AudioCodec,
+  type VideoCodec,
   type ContainerKind,
 } from "../moq/publisher.ts";
 
@@ -23,6 +24,11 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
 const AUDIO_CODECS: { value: AudioCodec; label: string }[] = [
   { value: "opus", label: "Opus" },
   { value: "aac", label: "AAC" },
+];
+
+const VIDEO_CODECS: { value: VideoCodec; label: string }[] = [
+  { value: "avc1", label: "H264/avc1" },
+  { value: "annexb", label: "H264/annexB" },
 ];
 
 const CONTAINERS: { value: ContainerKind; label: string }[] = [
@@ -103,6 +109,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
+  const [videoCodec, setVideoCodec] = useState<VideoCodec>("avc1");
+  const [includeDescription, setIncludeDescription] = useState(true);
   const [videoContainer, setVideoContainer] = useState<ContainerKind>("cmaf");
   const [audioContainer, setAudioContainer] = useState<ContainerKind>("cmaf");
   const [contentHint, setContentHint] = useState<string>("auto");
@@ -156,6 +164,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
 
   const start = async () => {
     if (busy || handleRef.current) return;
+    if (videoContainer === "cmaf" && videoCodec === "annexb") {
+      setStatus({
+        state: "error",
+        message: "Annex B bitstream requires the Legacy container (CMAF uses avc1).",
+      });
+      return;
+    }
     setBusy(true);
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
@@ -170,6 +185,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         audioSource,
         audioProcessing,
         audioCodec,
+        videoCodec,
+        includeDescription,
         videoContainer,
         audioContainer,
         wsFallback,
@@ -288,12 +305,36 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             disabled={disabled}
           />
           <SourceSelect
+            label="Codec"
+            value={videoCodec}
+            options={VIDEO_CODECS}
+            onChange={setVideoCodec}
+            disabled={disabled}
+          />
+          <SourceSelect
             label="Container"
             value={videoContainer}
             options={CONTAINERS}
             onChange={setVideoContainer}
             disabled={disabled}
           />
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Catalog</span>
+            <Checkbox
+              label="Include description"
+              checked={includeDescription}
+              onChange={setIncludeDescription}
+              disabled={disabled}
+            />
+          </div>
         </OptionGroup>
         <OptionGroup label="Audio">
           <SourceSelect

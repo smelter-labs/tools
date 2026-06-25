@@ -19,6 +19,8 @@ export type SourceKind = "camera" | "screen";
 
 export type AudioCodec = "aac" | "opus";
 
+export type VideoCodec = "avc1" | "annexb";
+
 export type ContainerKind = "cmaf" | "legacy";
 
 // Maps each selectable audio codec to the single codec string that drives both
@@ -88,6 +90,15 @@ export interface PublishOptions {
   audioProcessing: AudioProcessing;
   /** Audio codec to encode/publish. Defaults to `"aac"` when unset. */
   audioCodec?: AudioCodec;
+  /** Video codec/framing. Defaults to "avc1" (length-prefixed NALUs). */
+  videoCodec?: VideoCodec;
+  /**
+   * Advertise the avc1 decoder config (avcC) out-of-band in the catalog —
+   * hang `description` and the legacy MSF `initData`. Defaults to true. Ignored
+   * for annexb (config is always in-band). For CMAF the init segment is
+   * mandatory regardless; this only toggles the redundant `description` field.
+   */
+  includeDescription?: boolean;
   /** Video container. Defaults to "cmaf". */
   videoContainer?: ContainerKind;
   /** Audio container. Defaults to "cmaf". */
@@ -199,7 +210,12 @@ async function getAudioTrack(
 export async function startPublishing(opts: PublishOptions): Promise<PublishHandle> {
   const status = (s: PublishStatus) => opts.onStatus?.(s);
   const audioCodec = AUDIO_CODECS[opts.audioCodec ?? "aac"];
+  const videoCodecKind = opts.videoCodec ?? "avc1";
+  const includeDescription = opts.includeDescription ?? true;
   const videoContainer = opts.videoContainer ?? "cmaf";
+  // Whether to advertise the avc1 avcC config out-of-band (hang `description`,
+  // legacy MSF `initData`). CMAF still always builds its mandatory init segment.
+  const advertiseConfig = videoCodecKind === "avc1" && includeDescription;
   const audioContainer = opts.audioContainer ?? "cmaf";
 
   // ---- 1. Capture ---------------------------------------------------------
@@ -275,6 +291,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   // Init-segment + dimension/format info, filled in from the first chunks.
   let videoInitB64: string | null = null;
+  // Base64 avcC decoder config, used as the legacy-container MSF `initData` for
+  // avc1 (CMAF carries the avcC inside its full MP4 init segment instead).
+  let videoConfigB64: string | null = null;
   let audioInitB64: string | null = null;
   let videoDescHex: string | null = null;
   let audioDescHex: string | null = null;
@@ -321,7 +340,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             codedHeight: videoH,
             framerate: FRAMERATE,
             bitrate: VIDEO_BITRATE,
-            description: videoContainer === "cmaf" ? (videoDescHex ?? undefined) : undefined,
+            // avc1 advertises its avcC config out-of-band (any container) when
+            // enabled; annexb keeps SPS/PPS in-band, so never a description.
+            description: advertiseConfig ? (videoDescHex ?? undefined) : undefined,
           },
         },
       },
@@ -358,7 +379,14 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       height: videoH,
       framerate: FRAMERATE,
       bitrate: VIDEO_BITRATE,
-      initData: videoContainer === "cmaf" ? videoInitB64! : undefined,
+      // CMAF's init segment is mandatory (it carries the avcC); legacy carries
+      // the raw avcC only when the description is enabled. annexb: in-band.
+      initData:
+        videoContainer === "cmaf"
+          ? (videoCodecKind === "avc1" ? videoInitB64! : undefined)
+          : advertiseConfig
+            ? (videoConfigB64 ?? undefined)
+            : undefined,
     };
 
     const msfTracks: Msf.Track[] = [msfVideo];
@@ -385,23 +413,36 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   const videoEncoder = new VideoEncoder({
     output: (chunk, meta) => {
       try {
-        if (videoContainer === "cmaf") {
-          const desc = meta?.decoderConfig?.description;
-          if (desc && !videoInitB64) {
-            const avcC = Cmaf.toUint8(desc);
-            videoDescHex = Cmaf.bytesToHex(avcC);
-            videoW = meta?.decoderConfig?.codedWidth ?? videoW;
-            videoH = meta?.decoderConfig?.codedHeight ?? videoH;
-            videoInitB64 = Cmaf.videoInitBase64({ codedWidth: videoW, codedHeight: videoH, avcC });
+        if (!videoCatalogReady) {
+          const dc = meta?.decoderConfig;
+          videoW = dc?.codedWidth ?? videoW;
+          videoH = dc?.codedHeight ?? videoH;
+          // We need the avcC config when CMAF must build its mandatory init
+          // segment, or when avc1 is advertising the config out-of-band. Both
+          // arrive on the first keyframe's metadata, so wait for it.
+          if (videoCodecKind === "avc1" && (videoContainer === "cmaf" || advertiseConfig)) {
+            // avc1 signals SPS/PPS out-of-band via the avcC decoder config.
+            // Capture it so the catalog can advertise it (hex in hang
+            // `description`, base64 in legacy MSF `initData`). CMAF additionally
+            // wraps the avcC in a full MP4 init segment.
+            const desc = dc?.description;
+            if (desc) {
+              const avcC = Cmaf.toUint8(desc);
+              videoDescHex = Cmaf.bytesToHex(avcC);
+              videoConfigB64 = Cmaf.bytesToBase64(avcC);
+              if (videoContainer === "cmaf") {
+                videoInitB64 = Cmaf.videoInitBase64({ codedWidth: videoW, codedHeight: videoH, avcC });
+              }
+              videoCatalogReady = true;
+              maybeBuildCatalog();
+            }
+            // else: keep waiting for the config before the catalog is valid.
+          } else {
+            // Annex B (config in-band), or avc1+legacy with the description
+            // disabled: nothing to wait for, publish the catalog immediately.
             videoCatalogReady = true;
             maybeBuildCatalog();
           }
-        } else if (!videoCatalogReady) {
-          // Legacy: Annex B carries SPS/PPS in-band, so there's no init/desc.
-          videoW = meta?.decoderConfig?.codedWidth ?? videoW;
-          videoH = meta?.decoderConfig?.codedHeight ?? videoH;
-          videoCatalogReady = true;
-          maybeBuildCatalog();
         }
         writeVideoChunk(chunk);
       } catch (e) {
@@ -520,7 +561,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
               bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
               framerate: fps,
               latencyMode: "realtime",
-              avc: { format: videoContainer === "legacy" ? "annexb" : "avc" },
+              avc: { format: videoCodecKind === "annexb" ? "annexb" : "avc" },
             });
           }
           const ts = frame.timestamp;
