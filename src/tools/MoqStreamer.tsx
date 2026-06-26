@@ -35,6 +35,7 @@ const VIDEO_CODECS: { value: VideoCodec; label: string }[] = [
 const CONTAINERS: { value: ContainerKind; label: string }[] = [
   { value: "cmaf", label: "CMAF" },
   { value: "legacy", label: "Legacy" },
+  { value: "loc", label: "LOC" },
 ];
 
 const RESOLUTIONS: Record<string, { label: string; width?: number; height?: number }> = {

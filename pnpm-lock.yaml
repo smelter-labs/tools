@@ -11,6 +11,9 @@ importers:
       '@moq/hang':
         specifier: ^0.2.7
         version: 0.2.7(@svta/cml-utils@1.5.0)(@types/react@19.2.14)(react@19.2.4)
+      '@moq/loc':
+        specifier: ^0.1.1
+        version: 0.1.1(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)
       '@moq/msf':
         specifier: ^0.1.2
         version: 0.1.2(@types/react@19.2.14)(react@19.2.4)
@@ -391,6 +394,9 @@ packages:
 
   '@moq/loc@0.1.0':
     resolution: {integrity: sha512-8ouPBhoZU/vAaHCrcsi97zOw0BJX/rQbfUJ7Dx2/Cmao6c4knrAXl8EVjlwKM4HLjfa8xzPd4Lqxkfv7G4QyhA==}
+
+  '@moq/loc@0.1.1':
+    resolution: {integrity: sha512-/DUgFYRmgHauxTaskPNn6tmv1UEYhuUk3bK4y67jZzAMy2N8sMZL6dyXuZvA2+n8jd/yZqy/pB+/+Tfj35JixQ==}
 
   '@moq/msf@0.1.2':
     resolution: {integrity: sha512-gKkul97ILVBU18B1hVPzMoMZXjU9XyPgjgc3OJgF5Td+vznPQos9UsebIJXVPKlIG1e5p02HwNyvPT3kQ3c74g==}
@@ -1559,7 +1565,16 @@ snapshots:
 
   '@moq/loc@0.1.0(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)':
     dependencies:
-      '@moq/net': 0.1.2(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)
+      '@moq/net': 0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)
+    transitivePeerDependencies:
+      - '@types/react'
+      - react
+      - solid-js
+      - zod
+
+  '@moq/loc@0.1.1(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)':
+    dependencies:
+      '@moq/net': 0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)
     transitivePeerDependencies:
       - '@types/react'
       - react
@@ -1579,6 +1594,17 @@ snapshots:
     dependencies:
       '@moq/qmux': 0.0.6
       '@moq/signals': 0.1.7(@types/react@19.2.14)(react@19.2.4)
+      async-mutex: 0.5.0
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@types/react'
+      - react
+      - solid-js
+
+  '@moq/net@0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)':
+    dependencies:
+      '@moq/qmux': 0.0.6
+      '@moq/signals': 0.1.9(@types/react@19.2.14)(react@19.2.4)
       async-mutex: 0.5.0
       zod: 4.3.6
     transitivePeerDependencies:

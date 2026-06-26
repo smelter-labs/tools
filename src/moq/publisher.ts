@@ -12,6 +12,7 @@ import * as Net from "@moq/net";
 import * as Catalog from "@moq/hang/catalog";
 import * as Msf from "@moq/msf";
 import { Legacy } from "@moq/hang/container";
+import * as Loc from "@moq/loc";
 import type { Time } from "@moq/net";
 import * as Cmaf from "./cmaf";
 
@@ -21,7 +22,7 @@ export type AudioCodec = "aac-raw" | "aac-adts" | "opus";
 
 export type VideoCodec = "avc1" | "annexb";
 
-export type ContainerKind = "cmaf" | "legacy";
+export type ContainerKind = "cmaf" | "legacy" | "loc";
 
 // Maps each selectable audio codec to the single codec string that drives both
 // WebCodecs (AudioEncoder.configure / isConfigSupported) and the CMAF init
@@ -49,7 +50,8 @@ export type AudioProcessing = {
 // at the type level; the JSON we emit is identical and re-validated on consume).
 type Container =
   | { kind: "cmaf"; init: string; timescale: number; trackId: number }
-  | { kind: "legacy" };
+  | { kind: "legacy" }
+  | { kind: "loc" };
 interface CatalogRoot {
   video: {
     renditions: Record<
@@ -294,6 +296,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let videoOut: Net.Track | null = null;
   let audioOut: Net.Track | null = null;
   let videoGroup: Net.Group | null = null;
+  let videoLocProducer: Loc.Producer | null = null;
+  let audioLocProducer: Loc.Producer | null = null;
+  let videoLocStarted = false; // gate: drop inter-frames until first keyframe reaches producer
 
   let videoSeq = 0;
   let audioSeq = 0;
@@ -345,7 +350,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             container:
               videoContainer === "cmaf"
                 ? { kind: "cmaf", init: videoInitB64!, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID }
-                : { kind: "legacy" },
+                : videoContainer === "loc"
+                  ? { kind: "loc" }
+                  : { kind: "legacy" },
             codedWidth: videoW,
             codedHeight: videoH,
             framerate: FRAMERATE,
@@ -366,7 +373,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             container:
               audioContainer === "cmaf"
                 ? { kind: "cmaf", init: audioInitB64!, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID }
-                : { kind: "legacy" },
+                : audioContainer === "loc"
+                  ? { kind: "loc" }
+                  : { kind: "legacy" },
             sampleRate: audioSampleRate,
             numberOfChannels: audioChannels,
             bitrate: AUDIO_BITRATE,
@@ -512,10 +521,22 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     : null;
 
   function writeVideoChunk(chunk: EncodedVideoChunk) {
+    const isKey = chunk.type === "key";
+
+    if (videoContainer === "loc") {
+      const p = videoLocProducer;
+      if (!p) return;
+      if (!isKey && !videoLocStarted) return; // Producer throws on a non-key first frame
+      if (isKey) videoLocStarted = true;
+      const data = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(data);
+      p.encode(data, chunk.timestamp as Time.Micro, isKey);
+      return;
+    }
+
     const out = videoOut;
     if (!out || out.state.closed.peek()) return;
 
-    const isKey = chunk.type === "key";
     if (isKey) {
       // GOP == group. Close the previous group and open a new one.
       videoGroup?.close();
@@ -540,6 +561,13 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   }
 
   function writeAudioChunk(chunk: EncodedAudioChunk) {
+    if (audioContainer === "loc") {
+      const data = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(data);
+      audioLocProducer?.encode(data, chunk.timestamp as Time.Micro, true);
+      return;
+    }
+
     const out = audioOut;
     if (!out || out.state.closed.peek()) return;
 
@@ -740,6 +768,16 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             serveMsfCatalog(track);
             break;
           case TRACK_VIDEO:
+            if (videoContainer === "loc") {
+              videoLocProducer = new Loc.Producer(track);
+              videoLocStarted = false;
+              forceKeyframe = true;
+              track.closed.then(() => {
+                // The remote closed the track; don't call producer.close() here.
+                if (videoLocProducer) videoLocProducer = null;
+              });
+              break;
+            }
             videoOut = track;
             videoGroup = null;
             forceKeyframe = true;
@@ -753,6 +791,13 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
           case TRACK_AUDIO:
             if (!audioEnabled) {
               track.close(new Error("audio not published"));
+              break;
+            }
+            if (audioContainer === "loc") {
+              audioLocProducer = new Loc.Producer(track);
+              track.closed.then(() => {
+                if (audioLocProducer) audioLocProducer = null;
+              });
               break;
             }
             audioOut = track;
@@ -803,6 +848,14 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       } catch {
         /* ignore */
       }
+      try {
+        videoLocProducer?.close();
+        audioLocProducer?.close();
+      } catch {
+        /* ignore */
+      }
+      videoLocProducer = null;
+      audioLocProducer = null;
 
       previewStream.getTracks().forEach((t) => t.stop());
 
