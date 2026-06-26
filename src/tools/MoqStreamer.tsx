@@ -23,7 +23,8 @@ const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
 
 const AUDIO_CODECS: { value: AudioCodec; label: string }[] = [
   { value: "opus", label: "Opus" },
-  { value: "aac", label: "AAC" },
+  { value: "aac-raw", label: "AAC/raw" },
+  { value: "aac-adts", label: "AAC/ADTS" },
 ];
 
 const VIDEO_CODECS: { value: VideoCodec; label: string }[] = [
@@ -111,6 +112,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
   const [videoCodec, setVideoCodec] = useState<VideoCodec>("avc1");
   const [includeDescription, setIncludeDescription] = useState(true);
+  const [audioIncludeDescription, setAudioIncludeDescription] = useState(true);
   const [videoContainer, setVideoContainer] = useState<ContainerKind>("cmaf");
   const [audioContainer, setAudioContainer] = useState<ContainerKind>("cmaf");
   const [contentHint, setContentHint] = useState<string>("auto");
@@ -171,6 +173,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       });
       return;
     }
+    if (audioContainer === "cmaf" && audioCodec === "aac-adts") {
+      setStatus({
+        state: "error",
+        message: "ADTS bitstream requires the Legacy container (CMAF uses raw AAC).",
+      });
+      return;
+    }
     setBusy(true);
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
@@ -187,6 +196,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         audioCodec,
         videoCodec,
         includeDescription,
+        audioIncludeDescription,
         videoContainer,
         audioContainer,
         wsFallback,
@@ -332,7 +342,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
               label="Include description"
               checked={includeDescription}
               onChange={setIncludeDescription}
-              disabled={disabled}
+              disabled={disabled || videoCodec !== "avc1"}
             />
           </div>
         </OptionGroup>
@@ -365,6 +375,23 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             onChange={setAudioContainer}
             disabled={disabled}
           />
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Catalog</span>
+            <Checkbox
+              label="Include description"
+              checked={audioIncludeDescription}
+              onChange={setAudioIncludeDescription}
+              disabled={disabled || audioCodec !== "aac-raw"}
+            />
+          </div>
           <div
             style={{
               display: "flex",

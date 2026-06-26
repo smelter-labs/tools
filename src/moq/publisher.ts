@@ -17,7 +17,7 @@ import * as Cmaf from "./cmaf";
 
 export type SourceKind = "camera" | "screen";
 
-export type AudioCodec = "aac" | "opus";
+export type AudioCodec = "aac-raw" | "aac-adts" | "opus";
 
 export type VideoCodec = "avc1" | "annexb";
 
@@ -27,7 +27,8 @@ export type ContainerKind = "cmaf" | "legacy";
 // WebCodecs (AudioEncoder.configure / isConfigSupported) and the CMAF init
 // segment + catalog rendition.
 const AUDIO_CODECS: Record<AudioCodec, string> = {
-  aac: "mp4a.40.2", // AAC-LC
+  "aac-raw": "mp4a.40.2", // AAC-LC, raw (MP4) bitstream
+  "aac-adts": "mp4a.40.2", // AAC-LC, ADTS bitstream
   opus: "opus",
 };
 
@@ -88,7 +89,7 @@ export interface PublishOptions {
   /** Audio source: NONE / SCREEN / MICROPHONE sentinel, or a concrete device id. */
   audioSource: string;
   audioProcessing: AudioProcessing;
-  /** Audio codec to encode/publish. Defaults to `"aac"` when unset. */
+  /** Audio codec to encode/publish. Defaults to `"aac-raw"` when unset. */
   audioCodec?: AudioCodec;
   /** Video codec/framing. Defaults to "avc1" (length-prefixed NALUs). */
   videoCodec?: VideoCodec;
@@ -99,6 +100,14 @@ export interface PublishOptions {
    * mandatory regardless; this only toggles the redundant `description` field.
    */
   includeDescription?: boolean;
+  /**
+   * Advertise the raw-AAC AudioSpecificConfig (ASC) out-of-band in the catalog
+   * `description`. Defaults to true. Only meaningful for `aac-raw` (ADTS frames
+   * are self-describing, Opus always carries its dOps). For CMAF the init
+   * segment is mandatory regardless; this only toggles the redundant
+   * `description` field.
+   */
+  audioIncludeDescription?: boolean;
   /** Video container. Defaults to "cmaf". */
   videoContainer?: ContainerKind;
   /** Audio container. Defaults to "cmaf". */
@@ -209,9 +218,10 @@ async function getAudioTrack(
 
 export async function startPublishing(opts: PublishOptions): Promise<PublishHandle> {
   const status = (s: PublishStatus) => opts.onStatus?.(s);
-  const audioCodec = AUDIO_CODECS[opts.audioCodec ?? "aac"];
+  const audioCodec = AUDIO_CODECS[opts.audioCodec ?? "aac-raw"];
   const videoCodecKind = opts.videoCodec ?? "avc1";
   const includeDescription = opts.includeDescription ?? true;
+  const audioIncludeDescription = opts.audioIncludeDescription ?? true;
   const videoContainer = opts.videoContainer ?? "cmaf";
   // Whether to advertise the avc1 avcC config out-of-band (hang `description`,
   // legacy MSF `initData`). CMAF still always builds its mandatory init segment.
@@ -360,7 +370,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             sampleRate: audioSampleRate,
             numberOfChannels: audioChannels,
             bitrate: AUDIO_BITRATE,
-            description: audioContainer === "cmaf" ? (audioDescHex ?? undefined) : undefined,
+            description: audioDescHex ?? undefined,
           },
         },
       };
@@ -460,9 +470,18 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             if (!audioInitB64) {
               const desc = meta?.decoderConfig?.description;
               // Opus needs the WebCodecs OpusHead converted to dOps layout; AAC's
-              // AudioSpecificConfig passes through unchanged (see helper).
+              // AudioSpecificConfig passes through unchanged (see helper). The init
+              // segment always carries the ASC; whether it's also advertised in the
+              // catalog `description` is gated below.
               const asc = desc ? audioDescriptionForCmaf(Cmaf.toUint8(desc), opts.audioCodec) : undefined;
-              if (asc) audioDescHex = Cmaf.bytesToHex(asc);
+              if (asc) {
+                // opus: always advertise dOps (redundant with init). aac-raw: only
+                // when the audio toggle is on. aac-adts never reaches here (blocked
+                // upstream), but defensively leave the description null.
+                if (opts.audioCodec === "opus" || (opts.audioCodec === "aac-raw" && audioIncludeDescription)) {
+                  audioDescHex = Cmaf.bytesToHex(asc);
+                }
+              }
               audioInitB64 = Cmaf.audioInitBase64({
                 codec: audioCodec,
                 sampleRate: audioSampleRate,
@@ -474,7 +493,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             }
           } else if (!audioCatalogReady) {
             // Legacy: ADTS (AAC) and raw Opus packets are self-describing, so no
-            // init segment or description is needed.
+            // init segment is needed. For raw AAC, the ASC is advertised
+            // out-of-band in the catalog `description` when the toggle is on.
+            if (opts.audioCodec === "aac-raw" && audioIncludeDescription) {
+              const desc = meta?.decoderConfig?.description;
+              if (desc) audioDescHex = Cmaf.bytesToHex(Cmaf.toUint8(desc));
+            }
             audioCatalogReady = true;
             maybeBuildCatalog();
           }
@@ -604,7 +628,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
                 sampleRate: audioSampleRate,
                 numberOfChannels: audioChannels,
                 bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
-                ...(opts.audioCodec === "aac" && audioContainer === "legacy"
+                ...(opts.audioCodec === "aac-adts"
                   ? { aac: { format: "adts" } }
                   : {}),
               });
