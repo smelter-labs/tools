@@ -20,7 +20,7 @@ export type SourceKind = "camera" | "screen";
 
 export type AudioCodec = "aac-raw" | "aac-adts" | "opus";
 
-export type VideoCodec = "avc1" | "annexb";
+export type VideoCodec = "avc1" | "annexb" | "vp8";
 
 export type ContainerKind = "cmaf" | "legacy" | "loc";
 
@@ -402,7 +402,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       // the raw avcC only when the description is enabled. annexb: in-band.
       initData:
         videoContainer === "cmaf"
-          ? (videoCodecKind === "avc1" ? videoInitB64! : undefined)
+          ? (videoCodecKind !== "annexb" ? videoInitB64! : undefined)
           : advertiseConfig
             ? (videoConfigB64 ?? undefined)
             : undefined,
@@ -439,7 +439,14 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
           // We need the avcC config when CMAF must build its mandatory init
           // segment, or when avc1 is advertising the config out-of-band. Both
           // arrive on the first keyframe's metadata, so wait for it.
-          if (videoCodecKind === "avc1" && (videoContainer === "cmaf" || advertiseConfig)) {
+          if (videoCodecKind === "vp8" && videoContainer === "cmaf") {
+            // VP8 is self-describing (no decoderConfig.description). The CMAF
+            // init segment is built from dimensions alone; the vpcC config box
+            // lives inside it. Nothing to wait for.
+            videoInitB64 = Cmaf.videoInitBase64Vp8({ codedWidth: videoW, codedHeight: videoH });
+            videoCatalogReady = true;
+            maybeBuildCatalog();
+          } else if (videoCodecKind === "avc1" && (videoContainer === "cmaf" || advertiseConfig)) {
             // avc1 signals SPS/PPS out-of-band via the avcC decoder config.
             // Capture it so the catalog can advertise it (hex in hang
             // `description`, base64 in legacy MSF `initData`). CMAF additionally
@@ -605,7 +612,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             const fps = opts.framerate ?? FRAMERATE;
             videoW = frame.codedWidth;
             videoH = frame.codedHeight;
-            videoCodec = avcCodecString(videoW, videoH, fps);
+            videoCodec = videoCodecKind === "vp8" ? "vp8" : avcCodecString(videoW, videoH, fps);
             videoEncoder.configure({
               codec: videoCodec,
               width: frame.codedWidth,
@@ -613,7 +620,11 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
               bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
               framerate: fps,
               latencyMode: "realtime",
-              avc: { format: videoCodecKind === "annexb" ? "annexb" : "avc" },
+              // H.264 selects an avc/annexb bitstream format; VP8 is
+              // self-describing and takes no codec-specific option.
+              ...(videoCodecKind === "vp8"
+                ? {}
+                : { avc: { format: videoCodecKind === "annexb" ? "annexb" : "avc" } as const }),
             });
           }
           const ts = frame.timestamp;
