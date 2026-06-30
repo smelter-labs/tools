@@ -20,7 +20,7 @@ export type SourceKind = "camera" | "screen";
 
 export type AudioCodec = "aac-raw" | "aac-adts" | "opus";
 
-export type VideoCodec = "avc1" | "annexb" | "vp8";
+export type VideoCodec = "avc1" | "annexb" | "vp8" | "vp9";
 
 export type ContainerKind = "cmaf" | "legacy" | "loc";
 
@@ -188,6 +188,28 @@ function avcCodecString(width: number, height: number, framerate: number): strin
   const levelByte = match ? match[0] : AVC_LEVELS[AVC_LEVELS.length - 1][0];
   return `avc1.6400${levelByte.toString(16).padStart(2, "0")}`;
 }
+
+// VP9 levels: [byte (level*10), MaxLumaSampleRate (samples/s), MaxLumaPictureSize (samples)]
+const VP9_LEVELS: [number, number, number][] = [
+  [30, 41_943_040, 2_228_224], // 3.0
+  [31, 83_886_080, 2_228_224], // 3.1
+  [40, 167_772_160, 8_912_896], // 4.0
+  [41, 335_544_320, 8_912_896], // 4.1
+  [50, 671_088_640, 35_651_584], // 5.0
+  [51, 1_342_177_280, 35_651_584], // 5.1
+  [52, 2_684_354_560, 35_651_584], // 5.2
+];
+
+// Build a "vp09.00.LL.08" codec string (profile 0, 8-bit) whose level covers
+// width×height@fps. VideoEncoder.configure rejects a bare "vp9".
+function vp9CodecString(width: number, height: number, framerate: number): string {
+  const samples = width * height;
+  const rate = samples * framerate;
+  const match = VP9_LEVELS.find(([, maxRate, maxPic]) => samples <= maxPic && rate <= maxRate);
+  const levelByte = match ? match[0] : VP9_LEVELS[VP9_LEVELS.length - 1][0];
+  return `vp09.00.${levelByte.toString(10).padStart(2, "0")}.08`;
+}
+
 const VIDEO_BITRATE = 5_000_000;
 const AUDIO_BITRATE = 128_000;
 const FRAMERATE = 30;
@@ -446,6 +468,13 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             videoInitB64 = Cmaf.videoInitBase64Vp8({ codedWidth: videoW, codedHeight: videoH });
             videoCatalogReady = true;
             maybeBuildCatalog();
+          } else if (videoCodecKind === "vp9" && videoContainer === "cmaf") {
+            // VP9 is self-describing (no decoderConfig.description). The CMAF
+            // init segment is built from dimensions alone; the vpcC config box
+            // lives inside it. Nothing to wait for.
+            videoInitB64 = Cmaf.videoInitBase64Vp9({ codedWidth: videoW, codedHeight: videoH });
+            videoCatalogReady = true;
+            maybeBuildCatalog();
           } else if (videoCodecKind === "avc1" && (videoContainer === "cmaf" || advertiseConfig)) {
             // avc1 signals SPS/PPS out-of-band via the avcC decoder config.
             // Capture it so the catalog can advertise it (hex in hang
@@ -598,6 +627,40 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   const videoReader = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrackIn }).readable.getReader();
   const readers: ReadableStreamDefaultReader<VideoFrame | AudioData>[] = [videoReader];
 
+  // Honor the requested resolution by scaling each captured frame. The
+  // getUserMedia/getDisplayMedia width/height above are only `ideal` hints, and
+  // cameras routinely ignore them — a webcam emits its native mode, and a
+  // virtual camera (OBS) exposes a single fixed mode — so without an explicit
+  // resize the selected resolution would never take effect. We key off the
+  // requested height and derive the width from the source aspect ratio so the
+  // image is never distorted.
+  const targetH = opts.height;
+  let scaleCanvas: OffscreenCanvas | null = null;
+  let scaleCtx: OffscreenCanvasRenderingContext2D | null = null;
+  let scaleW = 0;
+  let scaleH = 0;
+  const sizeFrame = (frame: VideoFrame): VideoFrame => {
+    if (!targetH || frame.codedHeight === 0) return frame;
+    if (scaleH === 0) {
+      scaleH = targetH % 2 ? targetH + 1 : targetH;
+      const w = Math.round((frame.codedWidth * scaleH) / frame.codedHeight);
+      scaleW = w % 2 ? w + 1 : w;
+    }
+    if (frame.codedWidth === scaleW && frame.codedHeight === scaleH) return frame;
+    if (!scaleCanvas) {
+      scaleCanvas = new OffscreenCanvas(scaleW, scaleH);
+      scaleCtx = scaleCanvas.getContext("2d");
+    }
+    if (!scaleCtx) return frame;
+    scaleCtx.drawImage(frame, 0, 0, scaleW, scaleH);
+    const resized = new VideoFrame(scaleCanvas, {
+      timestamp: frame.timestamp,
+      duration: frame.duration ?? undefined,
+    });
+    frame.close();
+    return resized;
+  };
+
   void (async () => {
     try {
       for (; ;) {
@@ -606,13 +669,18 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
           value?.close();
           break;
         }
-        const frame = value;
+        const frame = sizeFrame(value);
         try {
           if (videoEncoder.state === "unconfigured") {
             const fps = opts.framerate ?? FRAMERATE;
             videoW = frame.codedWidth;
             videoH = frame.codedHeight;
-            videoCodec = videoCodecKind === "vp8" ? "vp8" : avcCodecString(videoW, videoH, fps);
+            videoCodec =
+              videoCodecKind === "vp8"
+                ? "vp8"
+                : videoCodecKind === "vp9"
+                  ? vp9CodecString(videoW, videoH, fps)
+                  : avcCodecString(videoW, videoH, fps);
             videoEncoder.configure({
               codec: videoCodec,
               width: frame.codedWidth,
@@ -620,9 +688,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
               bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
               framerate: fps,
               latencyMode: "realtime",
-              // H.264 selects an avc/annexb bitstream format; VP8 is
-              // self-describing and takes no codec-specific option.
-              ...(videoCodecKind === "vp8"
+              // H.264 selects an avc/annexb bitstream format; VP8/VP9 are
+              // self-describing and take no codec-specific option.
+              ...(videoCodecKind === "vp8" || videoCodecKind === "vp9"
                 ? {}
                 : { avc: { format: videoCodecKind === "annexb" ? "annexb" : "avc" } as const }),
             });
@@ -727,6 +795,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         throw new Error(
           `Connection failed: the self-signed cert SHA-256 fingerprint does not match the relay's certificate. ` +
           `Re-copy the fingerprint, or clear it to use standard TLS verification. (${detail})`,
+          { cause: e },
         );
       }
       // No hash pinned: standard TLS verification failed. Most often the relay
@@ -734,9 +803,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       throw new Error(
         `Connection failed: TLS verification failed. If the relay uses a self-signed certificate, ` +
         `paste its SHA-256 fingerprint into the cert field. (${detail})`,
+        { cause: e },
       );
     }
-    throw new Error(`Connection failed: ${detail}`);
+    throw new Error(`Connection failed: ${detail}`, { cause: e });
   }
 
   const broadcast = new Net.Broadcast();

@@ -134,10 +134,11 @@ function createVpcCBox(): Uint8Array {
 }
 
 /**
- * `vp08` VisualSampleEntry. Same layout as createAvc1Box in encode.js, but the
- * type is `vp08` and the child config box is `vpcC` instead of `avcC`.
+ * `vp08`/`vp09` VisualSampleEntry. Same layout as createAvc1Box in encode.js,
+ * but the type is the passed `vp0x` box type and the child config box is `vpcC`
+ * instead of `avcC`.
  */
-function createVp08Box(width: number, height: number): Uint8Array {
+function createVpxBox(type: string, width: number, height: number): Uint8Array {
   const vpcC = createVpcCBox();
   const contentSize = 6 + 2 + 2 + 2 + 12 + 2 + 2 + 4 + 4 + 4 + 2 + 32 + 2 + 2 + vpcC.length;
   const out = new Uint8Array(8 + contentSize);
@@ -145,7 +146,7 @@ function createVp08Box(width: number, height: number): Uint8Array {
   let offset = 0;
   view.setUint32(offset, out.length, false);
   offset += 4;
-  writeType(out, offset, "vp08");
+  writeType(out, offset, type);
   offset += 4;
   // SampleEntry fields
   offset += 6; // reserved
@@ -180,11 +181,31 @@ function createVp08Box(width: number, height: number): Uint8Array {
 
 /**
  * Build a CMAF (ftyp+moov) init segment for VP8 video and return it
- * base64-encoded. Mirrors the box tree built by @moq/hang's
- * createVideoInitSegment (encode.js:166), but with a `vp08`/`vpcC` sample entry
- * and no avcC/`description` requirement.
+ * base64-encoded.
  */
 export function videoInitBase64Vp8(opts: { codedWidth: number; codedHeight: number }): string {
+  return videoInitBase64Vpx("vp08", opts);
+}
+
+/**
+ * Build a CMAF (ftyp+moov) init segment for VP9 video and return it
+ * base64-encoded. Byte-identical to VP8 except the sample-entry box type;
+ * VP9 is self-describing so the vpcC stays profile 0 / level 0.
+ */
+export function videoInitBase64Vp9(opts: { codedWidth: number; codedHeight: number }): string {
+  return videoInitBase64Vpx("vp09", opts);
+}
+
+/**
+ * Build a CMAF (ftyp+moov) init segment for VP8/VP9 video and return it
+ * base64-encoded. Mirrors the box tree built by @moq/hang's
+ * createVideoInitSegment (encode.js:166), but with a `vp0x`/`vpcC` sample entry
+ * and no avcC/`description` requirement.
+ */
+function videoInitBase64Vpx(
+  type: string,
+  opts: { codedWidth: number; codedHeight: number },
+): string {
   const { codedWidth, codedHeight } = opts;
   const timescale = TIMESCALE;
   const trackId = TRACK_ID;
@@ -276,10 +297,10 @@ export function videoInitBase64Vp8(opts: { codedWidth: number; codedHeight: numb
   const dinf = box("dinf", dref);
 
   // stbl children
-  const vp08 = createVp08Box(codedWidth, codedHeight);
+  const vpx = createVpxBox(type, codedWidth, codedHeight);
   const stsdEntryCount = new Uint8Array(4);
   new DataView(stsdEntryCount.buffer).setUint32(0, 1, false);
-  const stsd = fullBox("stsd", 0, 0, concatBytes([stsdEntryCount, vp08]));
+  const stsd = fullBox("stsd", 0, 0, concatBytes([stsdEntryCount, vpx]));
   const stts = fullBox("stts", 0, 0, new Uint8Array(4)); // entry_count = 0
   const stsc = fullBox("stsc", 0, 0, new Uint8Array(4)); // entry_count = 0
   const stsz = fullBox("stsz", 0, 0, new Uint8Array(8)); // sample_size = 0, sample_count = 0

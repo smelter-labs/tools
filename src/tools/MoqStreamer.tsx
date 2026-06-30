@@ -31,6 +31,7 @@ const VIDEO_CODECS: { value: VideoCodec; label: string }[] = [
   { value: "avc1", label: "H264/avc1" },
   { value: "annexb", label: "H264/annexB" },
   { value: "vp8", label: "VP8" },
+  { value: "vp9", label: "VP9" },
 ];
 
 const CONTAINERS: { value: ContainerKind; label: string }[] = [
