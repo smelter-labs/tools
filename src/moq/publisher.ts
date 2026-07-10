@@ -116,6 +116,15 @@ export interface PublishOptions {
   audioContainer?: ContainerKind;
   wsFallback: boolean;
   /**
+   * Reanchor WebCodecs timestamps so each track independently starts at ~0.
+   * When on, every chunk has its own track's first timestamp subtracted,
+   * normalizing baseMediaDecodeTime to near-zero. Because the audio and video
+   * capture clocks have divergent absolute origins, per-track zeroing is what
+   * makes two co-captured samples land on the same number. Defaults to false
+   * (raw capture timestamps passed through unchanged).
+   */
+  reanchorTimestamps?: boolean;
+  /**
    * Encoder/capture overrides. `undefined` means "auto" — fall back to the
    * hardcoded defaults below (and capture-derived dimensions).
    */
@@ -251,6 +260,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   // legacy MSF `initData`). CMAF still always builds its mandatory init segment.
   const advertiseConfig = videoCodecKind === "avc1" && includeDescription;
   const audioContainer = opts.audioContainer ?? "cmaf";
+  const reanchorTimestamps = opts.reanchorTimestamps ?? false;
 
   // ---- 1. Capture ---------------------------------------------------------
   const videoConstraints: MediaTrackConstraints = {};
@@ -325,6 +335,25 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let videoSeq = 0;
   let audioSeq = 0;
   let framesEncoded = 0;
+
+  let firstVideoTsUs: number | null = null;
+  let firstAudioTsUs: number | null = null;
+
+  // Reanchor a raw WebCodecs timestamp by subtracting that track's OWN first
+  // timestamp, so each track independently starts at ~0. The audio and video
+  // capture clocks have divergent absolute origins (e.g. audio ~22s while video
+  // ~17000s for the same wall-clock moment), so per-track zeroing is what lets
+  // two co-captured samples land on the same number. Always >= 0 (a chunk's ts
+  // is >= its own track's first ts). No-op when the toggle is off.
+  const reanchor = (rawUs: number, kind: "video" | "audio"): number => {
+    if (!reanchorTimestamps) return rawUs;
+    if (kind === "video") {
+      firstVideoTsUs ??= rawUs;
+      return rawUs - firstVideoTsUs;
+    }
+    firstAudioTsUs ??= rawUs;
+    return rawUs - firstAudioTsUs;
+  };
 
   // Init-segment + dimension/format info, filled in from the first chunks.
   let videoInitB64: string | null = null;
@@ -558,6 +587,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   function writeVideoChunk(chunk: EncodedVideoChunk) {
     const isKey = chunk.type === "key";
+    const tsUs = reanchor(chunk.timestamp, "video");
 
     if (videoContainer === "loc") {
       const p = videoLocProducer;
@@ -566,7 +596,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       if (isKey) videoLocStarted = true;
       const data = new Uint8Array(chunk.byteLength);
       chunk.copyTo(data);
-      p.encode(data, chunk.timestamp as Time.Micro, isKey);
+      p.encode(data, tsUs as Time.Micro, isKey);
       return;
     }
 
@@ -587,20 +617,21 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       videoContainer === "cmaf"
         ? Cmaf.dataSegment({
           data,
-          timestampUs: chunk.timestamp,
+          timestampUs: tsUs,
           durationUs: chunk.duration ?? 1_000_000 / FRAMERATE,
           keyframe: isKey,
           sequence: videoSeq++,
         })
-        : Legacy.encodeFrame(data, chunk.timestamp as Time.Micro);
+        : Legacy.encodeFrame(data, tsUs as Time.Micro);
     videoGroup.writeFrame(frameBytes);
   }
 
   function writeAudioChunk(chunk: EncodedAudioChunk) {
+    const tsUs = reanchor(chunk.timestamp, "audio");
     if (audioContainer === "loc") {
       const data = new Uint8Array(chunk.byteLength);
       chunk.copyTo(data);
-      audioLocProducer?.encode(data, chunk.timestamp as Time.Micro, true);
+      audioLocProducer?.encode(data, tsUs as Time.Micro, true);
       return;
     }
 
@@ -613,12 +644,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       audioContainer === "cmaf"
         ? Cmaf.dataSegment({
           data,
-          timestampUs: chunk.timestamp,
+          timestampUs: tsUs,
           durationUs: chunk.duration ?? 0,
           keyframe: true, // every AAC frame is independently decodable
           sequence: audioSeq++,
         })
-        : Legacy.encodeFrame(data, chunk.timestamp as Time.Micro);
+        : Legacy.encodeFrame(data, tsUs as Time.Micro);
     // One group per audio frame keeps latency low and the consumer happy.
     out.writeFrame(frameBytes);
   }

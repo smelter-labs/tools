@@ -108,6 +108,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   });
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [wsFallback, setWsFallback] = useState(false);
+  const [reanchorTimestamps, setReanchorTimestamps] = useState(false);
   const [resolution, setResolution] = useState<string>("auto");
   const [framerate, setFramerate] = useState<string>("auto");
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
@@ -203,6 +204,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         videoContainer,
         audioContainer,
         wsFallback,
+        reanchorTimestamps,
         videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
         audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
         framerate: FRAMERATES[framerate]?.fps,
@@ -432,6 +434,12 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           label="Enable WebSocket fallback"
           checked={wsFallback}
           onChange={setWsFallback}
+          disabled={disabled}
+        />
+        <Checkbox
+          label="Reanchor each track to zero"
+          checked={reanchorTimestamps}
+          onChange={setReanchorTimestamps}
           disabled={disabled}
         />
       </div>
