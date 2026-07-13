@@ -134,6 +134,20 @@ export interface PublishOptions {
   width?: number;
   height?: number;
   /**
+   * Maximum interval between video keyframes, in microseconds. A keyframe is
+   * forced on the first captured frame whose timestamp is at least this far past
+   * the previous keyframe, so the encoded stream never goes longer than this
+   * between keyframes (subscriber-arrival still forces an earlier one). Empty/
+   * unset falls back to the hardcoded default (~2s).
+   */
+  keyframeIntervalUs?: number;
+  /**
+   * Buffer each complete GOP and publish it as a single burst (one group
+   * written all at once) instead of streaming frames live as they encode.
+   * Independent of `keyframeIntervalUs`. Defaults to false (stream live).
+   */
+  burstGroups?: boolean;
+  /**
    * Capture-track content hint (`MediaStreamTrack.contentHint`). Biases the
    * encoder's quality trade-off: "motion" favors temporal (framerate) quality,
    * "detail"/"text" favor spatial (resolution) quality. Empty/unset leaves it
@@ -261,6 +275,11 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   const advertiseConfig = videoCodecKind === "avc1" && includeDescription;
   const audioContainer = opts.audioContainer ?? "cmaf";
   const reanchorTimestamps = opts.reanchorTimestamps ?? false;
+  const keyframeIntervalUs = opts.keyframeIntervalUs ?? KEYFRAME_INTERVAL_US;
+  // When enabled, buffer each complete GOP and publish it as a single burst (one
+  // group written all at once) instead of streaming frames live as they encode.
+  // Independent of the keyframe interval. Defaults to false (stream live).
+  const bufferByGroup = opts.burstGroups ?? false;
 
   // ---- 1. Capture ---------------------------------------------------------
   const videoConstraints: MediaTrackConstraints = {};
@@ -328,6 +347,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let videoOut: Net.Track | null = null;
   let audioOut: Net.Track | null = null;
   let videoGroup: Net.Group | null = null;
+  // Buffered, container-encoded frames of the in-progress GOP (bufferByGroup
+  // mode only). Always starts with a keyframe; flushed as one group when the
+  // next keyframe closes the GOP.
+  let pendingGroupFrames: Uint8Array[] = [];
   let videoLocProducer: Loc.Producer | null = null;
   let audioLocProducer: Loc.Producer | null = null;
   let videoLocStarted = false; // gate: drop inter-frames until first keyframe reaches producer
@@ -603,13 +626,17 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     const out = videoOut;
     if (!out || out.state.closed.peek()) return;
 
-    if (isKey) {
+    if (bufferByGroup) {
+      // A keyframe closes the previous GOP (now complete) and opens a new one.
+      if (isKey) flushBufferedGroup(out);
+    } else if (isKey) {
       // GOP == group. Close the previous group and open a new one.
       videoGroup?.close();
       videoGroup = out.appendGroup();
     }
-    // A group must start with a keyframe; until we've seen one, drop frames.
-    if (!videoGroup) return;
+    // A group/GOP must start with a keyframe; until we've seen one, drop frames.
+    const started = bufferByGroup ? isKey || pendingGroupFrames.length > 0 : videoGroup !== null;
+    if (!started) return;
 
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
@@ -623,7 +650,24 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
           sequence: videoSeq++,
         })
         : Legacy.encodeFrame(data, tsUs as Time.Micro);
-    videoGroup.writeFrame(frameBytes);
+
+    if (bufferByGroup) {
+      // Accumulate the whole GOP; it is published as one burst when the next
+      // keyframe closes it (flushBufferedGroup above).
+      pendingGroupFrames.push(frameBytes);
+    } else {
+      videoGroup!.writeFrame(frameBytes);
+    }
+  }
+
+  // Publish the buffered GOP as a single group written all at once, then reset
+  // the buffer. No-op when nothing is buffered (bufferByGroup mode only).
+  function flushBufferedGroup(out: Net.Track) {
+    if (pendingGroupFrames.length === 0) return;
+    const group = out.appendGroup();
+    for (const frame of pendingGroupFrames) group.writeFrame(frame);
+    group.close();
+    pendingGroupFrames = [];
   }
 
   function writeAudioChunk(chunk: EncodedAudioChunk) {
@@ -727,7 +771,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             });
           }
           const ts = frame.timestamp;
-          const key = forceKeyframe || lastKeyframeUs < 0 || ts - lastKeyframeUs >= KEYFRAME_INTERVAL_US;
+          const key = forceKeyframe || lastKeyframeUs < 0 || ts - lastKeyframeUs >= keyframeIntervalUs;
           if (key) {
             lastKeyframeUs = ts;
             forceKeyframe = false;
@@ -892,6 +936,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             }
             videoOut = track;
             videoGroup = null;
+            pendingGroupFrames = [];
             forceKeyframe = true;
             track.closed.then(() => {
               if (videoOut === track) {

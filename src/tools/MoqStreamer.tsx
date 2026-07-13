@@ -109,9 +109,11 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [wsFallback, setWsFallback] = useState(false);
   const [reanchorTimestamps, setReanchorTimestamps] = useState(false);
+  const [burstGroups, setBurstGroups] = useState(false);
   const [resolution, setResolution] = useState<string>("auto");
   const [framerate, setFramerate] = useState<string>("auto");
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
+  const [keyframeInterval, setKeyframeInterval] = useState<string>("");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
   const [videoCodec, setVideoCodec] = useState<VideoCodec>("avc1");
@@ -184,6 +186,19 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       });
       return;
     }
+    const trimmedKeyframe = keyframeInterval.trim();
+    let keyframeIntervalUs: number | undefined;
+    if (trimmedKeyframe !== "") {
+      const ms = Number(trimmedKeyframe);
+      if (!Number.isFinite(ms) || ms <= 0) {
+        setStatus({
+          state: "error",
+          message: "Keyframe interval must be a positive number of milliseconds (or empty for default).",
+        });
+        return;
+      }
+      keyframeIntervalUs = Math.round(ms * 1000);
+    }
     setBusy(true);
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
@@ -205,11 +220,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         audioContainer,
         wsFallback,
         reanchorTimestamps,
+        burstGroups,
         videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
         audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
         framerate: FRAMERATES[framerate]?.fps,
         width: RESOLUTIONS[resolution]?.width,
         height: RESOLUTIONS[resolution]?.height,
+        keyframeIntervalUs,
         contentHint: CONTENT_HINTS[contentHint]?.value,
         certHash,
         onStatus: setStatus,
@@ -310,6 +327,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             value={videoBitrate}
             options={selectOptions(VIDEO_BITRATES)}
             onChange={setVideoBitrate}
+            disabled={disabled}
+          />
+          <TextField
+            label="Keyframe interval (ms)"
+            value={keyframeInterval}
+            onChange={setKeyframeInterval}
+            placeholder="Default"
             disabled={disabled}
           />
           <SourceSelect
@@ -440,6 +464,12 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           label="Reanchor each track to zero"
           checked={reanchorTimestamps}
           onChange={setReanchorTimestamps}
+          disabled={disabled}
+        />
+        <Checkbox
+          label="Burst each group (buffer whole GOP, then send at once)"
+          checked={burstGroups}
+          onChange={setBurstGroups}
           disabled={disabled}
         />
       </div>
@@ -579,6 +609,44 @@ function Checkbox({
       />
       {label}
     </label>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}): ReactNode {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200 }}>
+      <label
+        style={{
+          marginBottom: 4,
+          fontSize: "0.85rem",
+          color: "var(--text-muted)",
+        }}
+      >
+        {label}
+      </label>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={1}
+        value={value}
+        disabled={disabled}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
+      />
+    </div>
   );
 }
 
