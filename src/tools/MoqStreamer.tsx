@@ -19,6 +19,7 @@ const MICROPHONE = "microphone";
 const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
   { value: "screen", label: "Screen" },
   { value: "camera", label: "Camera" },
+  { value: "none", label: "None (audio only)" },
 ];
 
 const AUDIO_CODECS: { value: AudioCodec; label: string }[] = [
@@ -115,6 +116,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
   const [keyframeInterval, setKeyframeInterval] = useState<string>("");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
+  const [audioGroupSize, setAudioGroupSize] = useState<string>("");
+  const [burstAudioGroups, setBurstAudioGroups] = useState(false);
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
   const [videoCodec, setVideoCodec] = useState<VideoCodec>("avc1");
   const [includeDescription, setIncludeDescription] = useState(true);
@@ -172,7 +175,14 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
 
   const start = async () => {
     if (busy || handleRef.current) return;
-    if (videoContainer === "cmaf" && videoCodec === "annexb") {
+    if (source === NONE && audioSource === NONE) {
+      setStatus({
+        state: "error",
+        message: "Select an audio source to publish an audio-only stream.",
+      });
+      return;
+    }
+    if (source !== NONE && videoContainer === "cmaf" && videoCodec === "annexb") {
       setStatus({
         state: "error",
         message: "Annex B bitstream requires the Legacy container (CMAF uses avc1).",
@@ -199,6 +209,19 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       }
       keyframeIntervalUs = Math.round(ms * 1000);
     }
+    const trimmedAudioGroup = audioGroupSize.trim();
+    let audioGroupSizeMs: number | undefined;
+    if (trimmedAudioGroup !== "") {
+      const ms = Number(trimmedAudioGroup);
+      if (!Number.isFinite(ms) || ms <= 0) {
+        setStatus({
+          state: "error",
+          message: "Audio group size must be a positive number of milliseconds (or empty for default).",
+        });
+        return;
+      }
+      audioGroupSizeMs = ms;
+    }
     setBusy(true);
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
@@ -221,6 +244,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         wsFallback,
         reanchorTimestamps,
         burstGroups,
+        audioGroupSizeMs,
+        burstAudioGroups,
         videoBitrate: VIDEO_BITRATES[videoBitrate]?.bps,
         audioBitrate: AUDIO_BITRATES[audioBitrate]?.bps,
         framerate: FRAMERATES[framerate]?.fps,
@@ -247,6 +272,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   };
 
   const disabled = running || busy;
+  // Audio-only stream: the video encoder options are irrelevant.
+  const videoDisabled = disabled || source === NONE;
 
   return (
     <div
@@ -313,49 +340,49 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             value={resolution}
             options={selectOptions(RESOLUTIONS)}
             onChange={setResolution}
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <SourceSelect
             label="Framerate"
             value={framerate}
             options={selectOptions(FRAMERATES)}
             onChange={setFramerate}
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <SourceSelect
             label="Max bitrate"
             value={videoBitrate}
             options={selectOptions(VIDEO_BITRATES)}
             onChange={setVideoBitrate}
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <TextField
             label="Keyframe interval (ms)"
             value={keyframeInterval}
             onChange={setKeyframeInterval}
             placeholder="Default"
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <SourceSelect
             label="Content hint"
             value={contentHint}
             options={selectOptions(CONTENT_HINTS)}
             onChange={setContentHint}
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <SourceSelect
             label="Codec"
             value={videoCodec}
             options={VIDEO_CODECS}
             onChange={setVideoCodec}
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <SourceSelect
             label="Container"
             value={videoContainer}
             options={CONTAINERS}
             onChange={setVideoContainer}
-            disabled={disabled}
+            disabled={videoDisabled}
           />
           <div
             style={{
@@ -371,7 +398,24 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
               label="Include description"
               checked={includeDescription}
               onChange={setIncludeDescription}
-              disabled={disabled || videoCodec !== "avc1"}
+              disabled={videoDisabled || videoCodec !== "avc1"}
+            />
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Delivery</span>
+            <Checkbox
+              label="Burst each group (buffer whole GOP, then send at once)"
+              checked={burstGroups}
+              onChange={setBurstGroups}
+              disabled={videoDisabled}
             />
           </div>
         </OptionGroup>
@@ -402,6 +446,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             value={audioContainer}
             options={CONTAINERS}
             onChange={setAudioContainer}
+            disabled={disabled}
+          />
+          <TextField
+            label="Group size (ms)"
+            value={audioGroupSize}
+            onChange={setAudioGroupSize}
+            placeholder="Default (per frame)"
             disabled={disabled}
           />
           <div
@@ -450,6 +501,23 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
               disabled={disabled}
             />
           </div>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Delivery</span>
+            <Checkbox
+              label="Burst each audio group (buffer whole group, then send at once)"
+              checked={burstAudioGroups}
+              onChange={setBurstAudioGroups}
+              disabled={disabled}
+            />
+          </div>
         </OptionGroup>
       </div>
 
@@ -464,12 +532,6 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           label="Reanchor each track to zero"
           checked={reanchorTimestamps}
           onChange={setReanchorTimestamps}
-          disabled={disabled}
-        />
-        <Checkbox
-          label="Burst each group (buffer whole GOP, then send at once)"
-          checked={burstGroups}
-          onChange={setBurstGroups}
           disabled={disabled}
         />
       </div>

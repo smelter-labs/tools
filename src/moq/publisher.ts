@@ -16,7 +16,7 @@ import * as Loc from "@moq/loc";
 import type { Time } from "@moq/net";
 import * as Cmaf from "./cmaf";
 
-export type SourceKind = "camera" | "screen";
+export type SourceKind = "camera" | "screen" | "none";
 
 export type AudioCodec = "aac-raw" | "aac-adts" | "opus";
 
@@ -53,7 +53,7 @@ type Container =
   | { kind: "legacy" }
   | { kind: "loc" };
 interface CatalogRoot {
-  video: {
+  video?: {
     renditions: Record<
       string,
       {
@@ -87,6 +87,10 @@ export interface PublishOptions {
   broadcastPath: string;
   /** Bearer token appended to the server URL as a `?token=` query param. */
   token?: string;
+  /**
+   * Video source. `"none"` publishes an audio-only broadcast (no video track,
+   * encoder, or catalog rendition); an audio source must then be selected.
+   */
   source: SourceKind;
   /** Audio source: NONE / SCREEN / MICROPHONE sentinel, or a concrete device id. */
   audioSource: string;
@@ -147,6 +151,20 @@ export interface PublishOptions {
    * Independent of `keyframeIntervalUs`. Defaults to false (stream live).
    */
   burstGroups?: boolean;
+  /**
+   * Target duration of each audio MoQ group, in milliseconds. The frame count
+   * per group is derived from this and the encoder's per-frame duration (Opus
+   * ~20ms, AAC ~21.3ms), so it lands as close to the requested duration as the
+   * frame granularity allows. Nothing to do with audio encoding. Empty/unset
+   * keeps the default of one group per audio frame (lowest latency).
+   */
+  audioGroupSizeMs?: number;
+  /**
+   * Buffer each complete audio group and publish it as a single burst (one
+   * group written all at once) instead of streaming frames live as they encode.
+   * Only meaningful when `audioGroupSizeMs` is set. Defaults to false.
+   */
+  burstAudioGroups?: boolean;
   /**
    * Capture-track content hint (`MediaStreamTrack.contentHint`). Biases the
    * encoder's quality trade-off: "motion" favors temporal (framerate) quality,
@@ -280,6 +298,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   // group written all at once) instead of streaming frames live as they encode.
   // Independent of the keyframe interval. Defaults to false (stream live).
   const bufferByGroup = opts.burstGroups ?? false;
+  // Target audio group duration (ms). Undefined => one group per audio frame.
+  // The per-frame count is derived lazily from the first chunk's duration.
+  const audioGroupSizeMs = opts.audioGroupSizeMs;
+  const bufferAudioByGroup = opts.burstAudioGroups ?? false;
 
   // ---- 1. Capture ---------------------------------------------------------
   const videoConstraints: MediaTrackConstraints = {};
@@ -292,7 +314,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   let videoTrackIn: MediaStreamTrack | undefined;
   let audioTrackIn: MediaStreamTrack | undefined;
-  if (opts.source === "screen" && opts.audioSource === SCREEN) {
+  if (opts.source === "none") {
+    // Audio-only broadcast: skip video capture entirely.
+    audioTrackIn = (await getAudioTrack(opts.audioSource, opts.audioProcessing)) ?? undefined;
+  } else if (opts.source === "screen" && opts.audioSource === SCREEN) {
     // Combined screen path: one getDisplayMedia prompt yields both tracks,
     // avoiding a second screen-share prompt for screen audio.
     const s = await navigator.mediaDevices.getDisplayMedia({ video, audio: true });
@@ -309,19 +334,19 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     audioTrackIn = aTrack ?? undefined;
   }
 
-  if (!videoTrackIn) {
-    audioTrackIn?.stop();
-    throw new Error("No video track captured.");
-  }
-  if (opts.contentHint) videoTrackIn.contentHint = opts.contentHint;
   // Naturally false when audioSource === NONE (getAudioTrack returns null), or
   // when the chosen source yielded no audio track.
   const audioEnabled = !!audioTrackIn;
+  const videoEnabled = !!videoTrackIn;
+  if (!videoEnabled && !audioEnabled) {
+    throw new Error("No media captured. Select a video source, an audio source, or both.");
+  }
+  if (videoTrackIn && opts.contentHint) videoTrackIn.contentHint = opts.contentHint;
 
   // Held tracks, used for preview and cleanup (they may come from separate
   // source streams).
   const previewStream = new MediaStream();
-  previewStream.addTrack(videoTrackIn);
+  if (videoTrackIn) previewStream.addTrack(videoTrackIn);
   if (audioTrackIn) previewStream.addTrack(audioTrackIn);
 
   if (audioEnabled) {
@@ -351,6 +376,15 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   // mode only). Always starts with a keyframe; flushed as one group when the
   // next keyframe closes the GOP.
   let pendingGroupFrames: Uint8Array[] = [];
+  // Audio grouping (audioGroupSizeMs mode only). `audioGroup` is the open group
+  // being filled; `audioGroupFrames` counts frames written into it;
+  // `pendingAudioGroupFrames` buffers a whole group for burst mode.
+  let audioGroup: Net.Group | null = null;
+  let audioGroupFrames = 0;
+  let pendingAudioGroupFrames: Uint8Array[] = [];
+  // Frames per audio group, derived once from the group size and the encoder's
+  // per-frame duration. 0 until the first chunk with a known duration arrives.
+  let audioFramesPerGroup = 0;
   let videoLocProducer: Loc.Producer | null = null;
   let audioLocProducer: Loc.Producer | null = null;
   let videoLocStarted = false; // gate: drop inter-frames until first keyframe reaches producer
@@ -413,11 +447,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   const maybeBuildCatalog = () => {
     if (catalog) return;
-    if (!videoCatalogReady) return;
+    if (videoEnabled && !videoCatalogReady) return;
     if (audioEnabled && !audioCatalogReady) return;
 
-    const root: CatalogRoot = {
-      video: {
+    const root: CatalogRoot = {};
+    if (videoEnabled) {
+      root.video = {
         renditions: {
           [TRACK_VIDEO]: {
             codec: videoCodec,
@@ -436,8 +471,8 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             description: advertiseConfig ? (videoDescHex ?? undefined) : undefined,
           },
         },
-      },
-    };
+      };
+    }
 
     if (audioEnabled) {
       root.audio = {
@@ -462,27 +497,28 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     // MSF catalog: the same track data as the hang catalog above, but as a flat
     // `tracks[]` array. For CMAF the init segment (videoInitB64/audioInitB64) is
     // the `initData`; legacy carries no init data in either catalog.
-    const msfVideo: Msf.Track = {
-      name: TRACK_VIDEO,
-      packaging: videoContainer,
-      isLive: true,
-      role: "video",
-      codec: videoCodec,
-      width: videoW,
-      height: videoH,
-      framerate: FRAMERATE,
-      bitrate: VIDEO_BITRATE,
-      // CMAF's init segment is mandatory (it carries the avcC); legacy carries
-      // the raw avcC only when the description is enabled. annexb: in-band.
-      initData:
-        videoContainer === "cmaf"
-          ? (videoCodecKind !== "annexb" ? videoInitB64! : undefined)
-          : advertiseConfig
-            ? (videoConfigB64 ?? undefined)
-            : undefined,
-    };
-
-    const msfTracks: Msf.Track[] = [msfVideo];
+    const msfTracks: Msf.Track[] = [];
+    if (videoEnabled) {
+      msfTracks.push({
+        name: TRACK_VIDEO,
+        packaging: videoContainer,
+        isLive: true,
+        role: "video",
+        codec: videoCodec,
+        width: videoW,
+        height: videoH,
+        framerate: FRAMERATE,
+        bitrate: VIDEO_BITRATE,
+        // CMAF's init segment is mandatory (it carries the avcC); legacy carries
+        // the raw avcC only when the description is enabled. annexb: in-band.
+        initData:
+          videoContainer === "cmaf"
+            ? (videoCodecKind !== "annexb" ? videoInitB64! : undefined)
+            : advertiseConfig
+              ? (videoConfigB64 ?? undefined)
+              : undefined,
+      });
+    }
     if (audioEnabled) {
       msfTracks.push({
         name: TRACK_AUDIO,
@@ -503,7 +539,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   };
 
   // ---- 3. Encoders --------------------------------------------------------
-  const videoEncoder = new VideoEncoder({
+  const videoEncoder = videoEnabled ? new VideoEncoder({
     output: (chunk, meta) => {
       try {
         if (!videoCatalogReady) {
@@ -557,7 +593,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
       }
     },
     error: fail,
-  });
+  }) : null;
 
   const audioEncoder = audioEnabled
     ? new AudioEncoder({
@@ -694,13 +730,60 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
           sequence: audioSeq++,
         })
         : Legacy.encodeFrame(data, tsUs as Time.Micro);
-    // One group per audio frame keeps latency low and the consumer happy.
-    out.writeFrame(frameBytes);
+
+    // Default (no group size requested): one group per audio frame keeps
+    // latency low and the consumer happy.
+    if (audioGroupSizeMs === undefined) {
+      out.writeFrame(frameBytes);
+      return;
+    }
+
+    // Group `audioFramesPerGroup` frames into each MoQ group. Derive that count
+    // once from the requested group duration and the encoder's per-frame
+    // duration (Opus ~20ms, AAC ~21.3ms). We compute the per-frame duration
+    // deterministically from the codec and sample rate rather than trusting
+    // `chunk.duration`, which Chrome frequently reports as null for encoded
+    // audio — a null there would collapse the count to 1, flushing a group per
+    // frame and defeating grouping/bursting entirely. `chunk.duration` is only
+    // used when it actually carries a positive value.
+    if (audioFramesPerGroup === 0) {
+      const frameDurUs =
+        chunk.duration && chunk.duration > 0
+          ? chunk.duration
+          : audioFrameDurationUs(opts.audioCodec, audioSampleRate);
+      audioFramesPerGroup =
+        frameDurUs > 0 ? Math.max(1, Math.round((audioGroupSizeMs * 1000) / frameDurUs)) : 1;
+    }
+
+    if (bufferAudioByGroup) {
+      // Accumulate the whole group; publish it as one burst once full.
+      pendingAudioGroupFrames.push(frameBytes);
+      if (pendingAudioGroupFrames.length >= audioFramesPerGroup) flushBufferedAudioGroup(out);
+      return;
+    }
+
+    // Live: open a group, stream frames into it, close it when it fills up.
+    if (!audioGroup || audioGroupFrames >= audioFramesPerGroup) {
+      audioGroup?.close();
+      audioGroup = out.appendGroup();
+      audioGroupFrames = 0;
+    }
+    audioGroup.writeFrame(frameBytes);
+    audioGroupFrames++;
+  }
+
+  // Publish the buffered audio group as a single group written all at once, then
+  // reset the buffer. No-op when nothing is buffered (burst audio mode only).
+  function flushBufferedAudioGroup(out: Net.Track) {
+    if (pendingAudioGroupFrames.length === 0) return;
+    const group = out.appendGroup();
+    for (const frame of pendingAudioGroupFrames) group.writeFrame(frame);
+    group.close();
+    pendingAudioGroupFrames = [];
   }
 
   // ---- 4. Capture -> encode loops ----------------------------------------
-  const videoReader = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrackIn }).readable.getReader();
-  const readers: ReadableStreamDefaultReader<VideoFrame | AudioData>[] = [videoReader];
+  const readers: ReadableStreamDefaultReader<VideoFrame | AudioData>[] = [];
 
   // Honor the requested resolution by scaling each captured frame. The
   // getUserMedia/getDisplayMedia width/height above are only `ideal` hints, and
@@ -736,7 +819,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     return resized;
   };
 
-  void (async () => {
+  if (videoEnabled && videoTrackIn && videoEncoder) {
+    const videoReader = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrackIn }).readable.getReader();
+    readers.push(videoReader);
+    void (async () => {
     try {
       for (; ;) {
         const { done, value } = await videoReader.read();
@@ -787,7 +873,8 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     } catch (e) {
       if (!stopped) fail(e);
     }
-  })();
+    })();
+  }
 
   if (audioEnabled && audioTrackIn && audioEncoder) {
     const audioReader = new MediaStreamTrackProcessor<AudioData>({ track: audioTrackIn }).readable.getReader();
@@ -853,7 +940,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     );
   } catch (e) {
     previewStream.getTracks().forEach((t) => t.stop());
-    closeEncoder(videoEncoder);
+    if (videoEncoder) closeEncoder(videoEncoder);
     if (audioEncoder) closeEncoder(audioEncoder);
     const err = e instanceof Error ? e : new Error(String(e));
     // `Net.Connection.connect` races transports with `Promise.any`, so a failed
@@ -924,6 +1011,10 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             serveMsfCatalog(track);
             break;
           case TRACK_VIDEO:
+            if (!videoEnabled) {
+              track.close(new Error("video not published"));
+              break;
+            }
             if (videoContainer === "loc") {
               videoLocProducer = new Loc.Producer(track);
               videoLocStarted = false;
@@ -958,8 +1049,14 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
               break;
             }
             audioOut = track;
+            audioGroup = null;
+            audioGroupFrames = 0;
+            pendingAudioGroupFrames = [];
             track.closed.then(() => {
-              if (audioOut === track) audioOut = null;
+              if (audioOut === track) {
+                audioOut = null;
+                audioGroup = null;
+              }
             });
             break;
           default:
@@ -976,6 +1073,11 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let lastCount = 0;
   const fpsTimer = setInterval(() => {
     if (stopped) return;
+    if (!videoEnabled) {
+      // Audio-only: no frame counter to report.
+      status({ state: "publishing" });
+      return;
+    }
     const fps = framesEncoded - lastCount;
     lastCount = framesEncoded;
     status({ state: "publishing", fps });
@@ -997,11 +1099,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         }
       }
 
-      closeEncoder(videoEncoder);
+      if (videoEncoder) closeEncoder(videoEncoder);
       if (audioEncoder) closeEncoder(audioEncoder);
 
       try {
         videoGroup?.close();
+        audioGroup?.close();
       } catch {
         /* ignore */
       }
@@ -1071,6 +1174,18 @@ function audioDescriptionForCmaf(
   out[8] = body[9]; // OutputGain: LE -> BE
   out[9] = body[8];
   return out;
+}
+
+/**
+ * Deterministic encoded-frame duration (µs) per audio codec, used to size audio
+ * groups when the encoder omits `chunk.duration` (Chrome frequently reports it
+ * as null for encoded audio). Opus emits fixed 20 ms frames; AAC-LC emits 1024
+ * samples per frame, so its duration depends on the sample rate.
+ */
+function audioFrameDurationUs(codec: AudioCodec | undefined, sampleRate: number): number {
+  if (codec === "opus") return 20_000;
+  // AAC-LC (aac-raw / aac-adts): 1024 samples per frame.
+  return sampleRate > 0 ? Math.round((1024 / sampleRate) * 1_000_000) : 0;
 }
 
 function closeEncoder(encoder: VideoEncoder | AudioEncoder) {
