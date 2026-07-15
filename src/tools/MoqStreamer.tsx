@@ -16,6 +16,9 @@ const NONE = "none";
 const SCREEN = "screen";
 const MICROPHONE = "microphone";
 
+// Path the broadcast is published under when the field is left empty.
+const DEFAULT_BROADCAST_PATH = "test";
+
 // Seconds added to / removed from a track's PTS per button click.
 const PTS_OFFSET_STEP_S = 10;
 
@@ -99,7 +102,7 @@ function selectOptions<T extends { label: string }>(
 export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
   const [token, setToken] = useSessionInput("moq:token", params, "token");
-  const broadcastPath = "test";
+  const [broadcastPath, setBroadcastPath] = useSessionInput("moq:path", params, "path");
   // TESTING ONLY: the relay's self-signed cert sha-256 fingerprint as raw hex.
   // Empty or invalid -> standard TLS verification.
   const [certHash, setCertHash] = useSessionInput("moq:cert", params, "cert");
@@ -255,15 +258,17 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       }
       audioGroupSizeMs = ms;
     }
+    const trimmedPath = broadcastPath.trim();
     setBusy(true);
     setStatus({ state: "connecting" });
     saveToHistory("moq:url", serverUrl);
     if (token) saveToHistory("moq:token", token);
     if (certHash) saveToHistory("moq:cert", certHash);
+    if (trimmedPath) saveToHistory("moq:path", trimmedPath);
     try {
       const handle = await startPublishing({
         serverUrl,
-        broadcastPath,
+        broadcastPath: trimmedPath || DEFAULT_BROADCAST_PATH,
         token,
         source,
         audioSource,
@@ -340,6 +345,13 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           onChange={setServerUrl}
           placeholder="https://localhost:4443/"
           label="Server URL"
+        />
+        <SuggestInput
+          historyKey="moq:path"
+          value={broadcastPath}
+          onChange={setBroadcastPath}
+          placeholder={DEFAULT_BROADCAST_PATH}
+          label="Broadcast path (optional)"
         />
         <SuggestInput
           historyKey="moq:token"
