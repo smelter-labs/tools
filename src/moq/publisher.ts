@@ -129,6 +129,13 @@ export interface PublishOptions {
    */
   reanchorTimestamps?: boolean;
   /**
+   * Constant offsets (µs) added to every outgoing video/audio timestamp, applied
+   * after any reanchoring. Both default to 0. These are the starting values —
+   * `handle.setPtsOffsetUs` changes them while publishing.
+   */
+  videoPtsOffsetUs?: number;
+  audioPtsOffsetUs?: number;
+  /**
    * Encoder/capture overrides. `undefined` means "auto" — fall back to the
    * hardcoded defaults below (and capture-derived dimensions).
    */
@@ -182,6 +189,13 @@ export interface PublishOptions {
    */
   certHash?: string;
   onStatus?: (status: PublishStatus) => void;
+  /**
+   * Fired when a `handle.setPtsOffsetUs` request actually reaches the wire —
+   * at the next keyframe for video, on the next frame for audio. Never fires for
+   * the initial `videoPtsOffsetUs`/`audioPtsOffsetUs`, which are live from the
+   * first chunk.
+   */
+  onPtsOffsetApplied?: (kind: "video" | "audio", offsetUs: number) => void;
 }
 
 export interface PublishStatus {
@@ -193,6 +207,17 @@ export interface PublishStatus {
 export interface PublishHandle {
   /** The captured MediaStream, for local preview. */
   stream: MediaStream;
+  /**
+   * Set the constant offset (µs) added to one track's outgoing timestamps, so a
+   * running stream can be made to jump its timeline — that's the point: it
+   * exercises a player's epoch-discontinuity handling.
+   *
+   * Video applies the change at the next keyframe (up to `keyframeIntervalUs`
+   * away; we deliberately don't force one early, which would perturb the very
+   * cadence under test). Audio applies it on the next frame. Either way
+   * `onPtsOffsetApplied` fires when it reaches the wire.
+   */
+  setPtsOffsetUs: (kind: "video" | "audio", offsetUs: number) => void;
   stop: () => Promise<void>;
 }
 
@@ -396,20 +421,39 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   let firstVideoTsUs: number | null = null;
   let firstAudioTsUs: number | null = null;
 
-  // Reanchor a raw WebCodecs timestamp by subtracting that track's OWN first
-  // timestamp, so each track independently starts at ~0. The audio and video
-  // capture clocks have divergent absolute origins (e.g. audio ~22s while video
-  // ~17000s for the same wall-clock moment), so per-track zeroing is what lets
-  // two co-captured samples land on the same number. Always >= 0 (a chunk's ts
-  // is >= its own track's first ts). No-op when the toggle is off.
-  const reanchor = (rawUs: number, kind: "video" | "audio"): number => {
-    if (!reanchorTimestamps) return rawUs;
-    if (kind === "video") {
-      firstVideoTsUs ??= rawUs;
-      return rawUs - firstVideoTsUs;
+  // Per-track PTS offsets (µs), changed live via handle.setPtsOffsetUs. These
+  // are the values actually applied to outgoing chunks. A requested video change
+  // waits in `videoPtsOffsetRequestedUs` until the next keyframe promotes it
+  // (see writeVideoChunk); audio has no keyframes to wait for, so a request
+  // lands straight in `audioPtsOffsetUs`.
+  let videoPtsOffsetUs = opts.videoPtsOffsetUs ?? 0;
+  let videoPtsOffsetRequestedUs = videoPtsOffsetUs;
+  let audioPtsOffsetUs = opts.audioPtsOffsetUs ?? 0;
+
+  // Turn a raw WebCodecs timestamp into the one we publish.
+  //
+  // Reanchoring subtracts that track's OWN first timestamp, so each track
+  // independently starts at ~0. The audio and video capture clocks have
+  // divergent absolute origins (e.g. audio ~22s while video ~17000s for the same
+  // wall-clock moment), so per-track zeroing is what lets two co-captured
+  // samples land on the same number. No-op when the toggle is off.
+  //
+  // The track's PTS offset is then added. It can change between two chunks,
+  // which is exactly how the epoch-discontinuity test works.
+  const timestampFor = (rawUs: number, kind: "video" | "audio"): number => {
+    let tsUs = rawUs;
+    if (reanchorTimestamps) {
+      if (kind === "video") {
+        firstVideoTsUs ??= rawUs;
+        tsUs = rawUs - firstVideoTsUs;
+      } else {
+        firstAudioTsUs ??= rawUs;
+        tsUs = rawUs - firstAudioTsUs;
+      }
     }
-    firstAudioTsUs ??= rawUs;
-    return rawUs - firstAudioTsUs;
+    // Floor at zero: a negative offset can push the timeline below zero, which
+    // no container we emit can express (CMAF's baseMediaDecodeTime is unsigned).
+    return Math.max(0, tsUs + (kind === "video" ? videoPtsOffsetUs : audioPtsOffsetUs));
   };
 
   // Init-segment + dimension/format info, filled in from the first chunks.
@@ -646,7 +690,14 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   function writeVideoChunk(chunk: EncodedVideoChunk) {
     const isKey = chunk.type === "key";
-    const tsUs = reanchor(chunk.timestamp, "video");
+    // A keyframe opens a fresh GOP, which is the only place a timeline jump can
+    // land without stranding inter-frames that reference a differently-timed
+    // keyframe. Promote the requested offset here, so a GOP never straddles two.
+    if (isKey && videoPtsOffsetRequestedUs !== videoPtsOffsetUs) {
+      videoPtsOffsetUs = videoPtsOffsetRequestedUs;
+      opts.onPtsOffsetApplied?.("video", videoPtsOffsetUs);
+    }
+    const tsUs = timestampFor(chunk.timestamp, "video");
 
     if (videoContainer === "loc") {
       const p = videoLocProducer;
@@ -707,7 +758,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   }
 
   function writeAudioChunk(chunk: EncodedAudioChunk) {
-    const tsUs = reanchor(chunk.timestamp, "audio");
+    const tsUs = timestampFor(chunk.timestamp, "audio");
     if (audioContainer === "loc") {
       const data = new Uint8Array(chunk.byteLength);
       chunk.copyTo(data);
@@ -1086,6 +1137,17 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   // ---- 8. Handle / cleanup ------------------------------------------------
   const handle: PublishHandle = {
     stream: previewStream,
+    setPtsOffsetUs: (kind, offsetUs) => {
+      if (kind === "video") {
+        // Deferred until the next keyframe promotes it (see writeVideoChunk).
+        videoPtsOffsetRequestedUs = offsetUs;
+        return;
+      }
+      // Every encoded audio frame is independently decodable, so there is no
+      // keyframe to wait for: the jump lands on the next frame.
+      audioPtsOffsetUs = offsetUs;
+      opts.onPtsOffsetApplied?.("audio", offsetUs);
+    },
     stop: async () => {
       if (stopped) return;
       stopped = true;

@@ -16,6 +16,9 @@ const NONE = "none";
 const SCREEN = "screen";
 const MICROPHONE = "microphone";
 
+// Seconds added to / removed from a track's PTS per button click.
+const PTS_OFFSET_STEP_S = 10;
+
 const SOURCE_OPTIONS: { value: SourceKind; label: string }[] = [
   { value: "screen", label: "Screen" },
   { value: "camera", label: "Camera" },
@@ -125,6 +128,12 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [videoContainer, setVideoContainer] = useState<ContainerKind>("cmaf");
   const [audioContainer, setAudioContainer] = useState<ContainerKind>("cmaf");
   const [contentHint, setContentHint] = useState<string>("auto");
+  // Requested PTS offsets (what the buttons move) and the offsets the publisher
+  // has actually put on the wire. Video's lags behind by up to a keyframe.
+  const [videoPtsOffset, setVideoPtsOffset] = useState(0);
+  const [audioPtsOffset, setAudioPtsOffset] = useState(0);
+  const [videoPtsOffsetApplied, setVideoPtsOffsetApplied] = useState(0);
+  const [audioPtsOffsetApplied, setAudioPtsOffsetApplied] = useState(0);
 
   const [status, setStatus] = useState<PublishStatus>({ state: "stopped" });
   const [busy, setBusy] = useState(false);
@@ -148,6 +157,22 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
     return () => navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
   }, [refreshDevices]);
 
+  // Push the PTS offsets at the running publisher, so a click mid-stream shifts
+  // the live timeline instead of only taking effect on the next Start. The
+  // publisher reports back through onPtsOffsetApplied once the change lands.
+  // With nothing publishing there is nothing to wait for: the offset is whatever
+  // the next Start will begin with.
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (handle) handle.setPtsOffsetUs("video", videoPtsOffset * 1_000_000);
+    else setVideoPtsOffsetApplied(videoPtsOffset);
+  }, [videoPtsOffset]);
+  useEffect(() => {
+    const handle = handleRef.current;
+    if (handle) handle.setPtsOffsetUs("audio", audioPtsOffset * 1_000_000);
+    else setAudioPtsOffsetApplied(audioPtsOffset);
+  }, [audioPtsOffset]);
+
   const namedAudioDevices = audioDevices.filter((d) => d.deviceId && d.label);
   const audioOptions = [
     { value: NONE, label: "None" },
@@ -161,6 +186,14 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
     const handle = handleRef.current;
     handleRef.current = null;
     setRunning(false);
+    // Stopping clears the offsets, so the next Start streams an unshifted
+    // timeline. Applied is reset alongside requested rather than left to the
+    // sync effects: a video offset still waiting on a keyframe when we stopped
+    // would otherwise stay stuck showing as pending forever.
+    setVideoPtsOffset(0);
+    setAudioPtsOffset(0);
+    setVideoPtsOffsetApplied(0);
+    setAudioPtsOffsetApplied(0);
     if (videoRef.current) videoRef.current.srcObject = null;
     await handle?.stop();
   };
@@ -243,6 +276,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         audioContainer,
         wsFallback,
         reanchorTimestamps,
+        videoPtsOffsetUs: videoPtsOffset * 1_000_000,
+        audioPtsOffsetUs: audioPtsOffset * 1_000_000,
         burstGroups,
         audioGroupSizeMs,
         burstAudioGroups,
@@ -255,6 +290,11 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         contentHint: CONTENT_HINTS[contentHint]?.value,
         certHash,
         onStatus: setStatus,
+        onPtsOffsetApplied: (kind, offsetUs) => {
+          const seconds = offsetUs / 1_000_000;
+          if (kind === "video") setVideoPtsOffsetApplied(seconds);
+          else setAudioPtsOffsetApplied(seconds);
+        },
       });
       handleRef.current = handle;
       setRunning(true);
@@ -418,6 +458,12 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
               disabled={videoDisabled}
             />
           </div>
+          <PtsOffsetField
+            offset={videoPtsOffset}
+            applied={videoPtsOffsetApplied}
+            onAdjust={(delta) => setVideoPtsOffset((o) => o + delta)}
+            disabled={busy || source === NONE}
+          />
         </OptionGroup>
         <OptionGroup label="Audio">
           <SourceSelect
@@ -518,6 +564,12 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
               disabled={disabled}
             />
           </div>
+          <PtsOffsetField
+            offset={audioPtsOffset}
+            applied={audioPtsOffsetApplied}
+            onAdjust={(delta) => setAudioPtsOffset((o) => o + delta)}
+            disabled={busy || audioSource === NONE}
+          />
         </OptionGroup>
       </div>
 
@@ -708,6 +760,72 @@ function TextField({
         onChange={(e) => onChange(e.target.value)}
         style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
       />
+    </div>
+  );
+}
+
+const formatOffset = (seconds: number) => `${seconds > 0 ? "+" : ""}${seconds} s`;
+
+/**
+ * Live PTS offset control: shifts this track's published timestamps by whole
+ * seconds. Stays enabled while publishing — clicking mid-stream jumps the live
+ * timeline, which is how a player's epoch-discontinuity handling gets tested.
+ *
+ * `offset` is what the buttons have asked for; `applied` is what the publisher
+ * has actually put on the wire. Video only jumps at a keyframe, so the two
+ * disagree until then and the note below spells out what is still going out.
+ */
+function PtsOffsetField({
+  offset,
+  applied,
+  onAdjust,
+  disabled,
+}: {
+  offset: number;
+  applied: number;
+  onAdjust: (deltaSeconds: number) => void;
+  disabled?: boolean;
+}): ReactNode {
+  const button = {
+    padding: "0.5rem 0.75rem",
+    fontSize: "1rem",
+    cursor: disabled ? "default" : "pointer",
+  };
+  const pending = applied !== offset;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200 }}>
+      <label
+        style={{
+          marginBottom: 4,
+          fontSize: "0.85rem",
+          color: "var(--text-muted)",
+        }}
+      >
+        PTS offset
+      </label>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <button onClick={() => onAdjust(-PTS_OFFSET_STEP_S)} disabled={disabled} style={button}>
+          −{PTS_OFFSET_STEP_S}
+        </button>
+        <span
+          style={{
+            flex: 1,
+            textAlign: "center",
+            fontSize: "1rem",
+            fontVariantNumeric: "tabular-nums",
+            color: offset === 0 ? "var(--text-muted)" : "var(--accent)",
+          }}
+        >
+          {formatOffset(offset)}
+        </span>
+        <button onClick={() => onAdjust(PTS_OFFSET_STEP_S)} disabled={disabled} style={button}>
+          +{PTS_OFFSET_STEP_S}
+        </button>
+      </div>
+      {/* Always rendered so appearing/disappearing text can't jog the layout. */}
+      <span style={{ marginTop: 4, minHeight: "1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+        {pending ? `sending ${formatOffset(applied)} until the next keyframe` : ""}
+      </span>
     </div>
   );
 }
