@@ -97,6 +97,13 @@ export interface PublishOptions {
   audioProcessing: AudioProcessing;
   /** Audio codec to encode/publish. Defaults to `"aac-raw"` when unset. */
   audioCodec?: AudioCodec;
+  /**
+   * Opus discontinuous transmission: during silence the encoder drops to
+   * occasional ~2-byte comfort-noise frames instead of a steady 20 ms stream,
+   * leaving gaps in the published timeline. Defaults to false. Only meaningful
+   * for `"opus"` — ignored by the AAC codecs.
+   */
+  opusDtx?: boolean;
   /** Video codec/framing. Defaults to "avc1" (length-prefixed NALUs). */
   videoCodec?: VideoCodec;
   /**
@@ -950,6 +957,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
                 bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
                 ...(opts.audioCodec === "aac-adts"
                   ? { aac: { format: "adts" } }
+                  : {}),
+                ...(opts.audioCodec === "opus" && opts.opusDtx
+                  ? { opus: { usedtx: true } }
                   : {}),
               });
             }
