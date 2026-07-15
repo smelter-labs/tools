@@ -125,6 +125,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [audioGroupSize, setAudioGroupSize] = useState<string>("");
   const [burstAudioGroups, setBurstAudioGroups] = useState(false);
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("opus");
+  const [opusDtx, setOpusDtx] = useState(false);
   const [videoCodec, setVideoCodec] = useState<VideoCodec>("avc1");
   const [includeDescription, setIncludeDescription] = useState(true);
   const [audioIncludeDescription, setAudioIncludeDescription] = useState(true);
@@ -274,6 +275,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         audioSource,
         audioProcessing,
         audioCodec,
+        opusDtx,
         videoCodec,
         includeDescription,
         audioIncludeDescription,
@@ -513,6 +515,23 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             placeholder="Default (per frame)"
             disabled={disabled}
           />
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+              flex: 1,
+              minWidth: 200,
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Encoder</span>
+            <Checkbox
+              label="DTX (drop frames during silence)"
+              checked={opusDtx}
+              onChange={setOpusDtx}
+              disabled={disabled || audioCodec !== "opus"}
+            />
+          </div>
           <div
             style={{
               display: "flex",
