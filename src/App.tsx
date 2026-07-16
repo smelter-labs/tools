@@ -3,6 +3,7 @@ import SmelterStats from "./tools/SmelterStats.tsx";
 import WhipStreamer from "./tools/WhipStreamer.tsx";
 import WhepPlayer from "./tools/WhepPlayer.tsx";
 import MoqStreamer from "./tools/MoqStreamer.tsx";
+import MoqPlayer from "./tools/MoqPlayer.tsx";
 import WavInspector from "./tools/WavInspector.tsx";
 
 const TOOLS = [
@@ -28,6 +29,12 @@ const TOOLS = [
     id: "moq-streamer",
     name: "MoQ Streamer",
     description: "Publish camera or screen as H264 + AAC over Media-over-QUIC",
+    scrollable: false,
+  },
+  {
+    id: "moq-player",
+    name: "MoQ Player",
+    description: "Play a MoQ broadcast from a relay",
     scrollable: false,
   },
   {
@@ -72,6 +79,8 @@ function ToolPage({ id, params }: { id: ToolId; params: URLSearchParams }) {
       return <WhepPlayer params={params} />;
     case "moq-streamer":
       return <MoqStreamer params={params} />;
+    case "moq-player":
+      return <MoqPlayer params={params} />;
     case "wav-inspector":
       return <WavInspector params={params} />;
   }
