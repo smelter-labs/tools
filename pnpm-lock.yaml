@@ -392,19 +392,11 @@ packages:
   '@moq/hang@0.2.7':
     resolution: {integrity: sha512-HLPpzDLsUf1dFA1M6qJMuo3Qupbyq/aiaXagh0anTjhOIjMReTF0f34Rqz+OlDWXBD3U18sPixc/WBHCwBvc0Q==}
 
-  '@moq/loc@0.1.0':
-    resolution: {integrity: sha512-8ouPBhoZU/vAaHCrcsi97zOw0BJX/rQbfUJ7Dx2/Cmao6c4knrAXl8EVjlwKM4HLjfa8xzPd4Lqxkfv7G4QyhA==}
-
   '@moq/loc@0.1.1':
     resolution: {integrity: sha512-/DUgFYRmgHauxTaskPNn6tmv1UEYhuUk3bK4y67jZzAMy2N8sMZL6dyXuZvA2+n8jd/yZqy/pB+/+Tfj35JixQ==}
 
   '@moq/msf@0.1.2':
     resolution: {integrity: sha512-gKkul97ILVBU18B1hVPzMoMZXjU9XyPgjgc3OJgF5Td+vznPQos9UsebIJXVPKlIG1e5p02HwNyvPT3kQ3c74g==}
-
-  '@moq/net@0.1.2':
-    resolution: {integrity: sha512-j8Eyu188n06RGWXIoarVFYPTWEq52WhdXVg3S0a3CGpXP0j5t0t2p9kUzUSgShdk4W6ItbvZ30mR+Ihwmuja0Q==}
-    peerDependencies:
-      zod: ^4.0.0
 
   '@moq/net@0.1.5':
     resolution: {integrity: sha512-JHt4KDEyhSw5cFiWzneTEBW/mFoLAQLLZJvCPieZvk+TL4RhqNjXS1NgzXs0ov3zMj3Ov67ziwZDBBIHf0mHow==}
@@ -413,20 +405,6 @@ packages:
 
   '@moq/qmux@0.0.6':
     resolution: {integrity: sha512-ISuGz05lUvf1hzHW3Aw3VnsGRJe1w9Qdog3LQ66KS+l+5mzQsPANvW8yOioEe1Z9dJO2G3sAHoGPnzwnsY9SIQ==}
-
-  '@moq/signals@0.1.7':
-    resolution: {integrity: sha512-Z45dKktZj1BLviWSXgZmtlePy02jx0H3cYp5+q9aYpDpb9k+v8shpjwBNNuTGxT4PUgxiQQFDY6YpKfLb54Xwg==}
-    peerDependencies:
-      '@types/react': ^19.1.8
-      react: ^19.0.0
-      solid-js: ^1.9.7
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
-      react:
-        optional: true
-      solid-js:
-        optional: true
 
   '@moq/signals@0.1.9':
     resolution: {integrity: sha512-Jh3JncApYxJP1MGqtX6N5qaq4uu/46aLyyQ9BR5Kc+wdT8Gx89XP+/LS5mR3jJv2q0BT7jzHrloUWuQGdhXqow==}
@@ -1275,9 +1253,6 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  zod@4.3.6:
-    resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
-
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
@@ -1552,25 +1527,16 @@ snapshots:
     dependencies:
       '@kixelated/libavjs-webcodecs-polyfill': 0.5.5
       '@libav.js/variant-opus-af': 6.8.8
-      '@moq/loc': 0.1.0(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)
-      '@moq/net': 0.1.2(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)
-      '@moq/signals': 0.1.7(@types/react@19.2.14)(react@19.2.4)
+      '@moq/loc': 0.1.1(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)
+      '@moq/net': 0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)
+      '@moq/signals': 0.1.9(@types/react@19.2.14)(react@19.2.4)
       '@svta/cml-iso-bmff': 1.0.2(@svta/cml-utils@1.5.0)
-      zod: 4.3.6
+      zod: 4.4.3
     transitivePeerDependencies:
       - '@svta/cml-utils'
       - '@types/react'
       - react
       - solid-js
-
-  '@moq/loc@0.1.0(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)':
-    dependencies:
-      '@moq/net': 0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)
-    transitivePeerDependencies:
-      - '@types/react'
-      - react
-      - solid-js
-      - zod
 
   '@moq/loc@0.1.1(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)':
     dependencies:
@@ -1590,28 +1556,6 @@ snapshots:
       - react
       - solid-js
 
-  '@moq/net@0.1.2(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)':
-    dependencies:
-      '@moq/qmux': 0.0.6
-      '@moq/signals': 0.1.7(@types/react@19.2.14)(react@19.2.4)
-      async-mutex: 0.5.0
-      zod: 4.3.6
-    transitivePeerDependencies:
-      - '@types/react'
-      - react
-      - solid-js
-
-  '@moq/net@0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.3.6)':
-    dependencies:
-      '@moq/qmux': 0.0.6
-      '@moq/signals': 0.1.9(@types/react@19.2.14)(react@19.2.4)
-      async-mutex: 0.5.0
-      zod: 4.3.6
-    transitivePeerDependencies:
-      - '@types/react'
-      - react
-      - solid-js
-
   '@moq/net@0.1.5(@types/react@19.2.14)(react@19.2.4)(zod@4.4.3)':
     dependencies:
       '@moq/qmux': 0.0.6
@@ -1624,11 +1568,6 @@ snapshots:
       - solid-js
 
   '@moq/qmux@0.0.6': {}
-
-  '@moq/signals@0.1.7(@types/react@19.2.14)(react@19.2.4)':
-    optionalDependencies:
-      '@types/react': 19.2.14
-      react: 19.2.4
 
   '@moq/signals@0.1.9(@types/react@19.2.14)(react@19.2.4)':
     optionalDependencies:
@@ -2025,8 +1964,8 @@ snapshots:
       '@babel/parser': 7.29.2
       eslint: 10.1.0
       hermes-parser: 0.25.1
-      zod: 4.3.6
-      zod-validation-error: 4.0.2(zod@4.3.6)
+      zod: 4.4.3
+      zod-validation-error: 4.0.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -2417,10 +2356,8 @@ snapshots:
 
   yocto-queue@0.1.0: {}
 
-  zod-validation-error@4.0.2(zod@4.3.6):
+  zod-validation-error@4.0.2(zod@4.4.3):
     dependencies:
-      zod: 4.3.6
-
-  zod@4.3.6: {}
+      zod: 4.4.3
 
   zod@4.4.3: {}
