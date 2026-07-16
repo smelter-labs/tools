@@ -3,33 +3,56 @@ import { useSessionInput } from "../useSessionInput.ts";
 import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
 import { createPeerConnection, negotiate } from "../webrtc.ts";
 
+const TRACK_TIMEOUT_MS = 10_000;
+
 async function connectWhep(
   endpointUrl: string,
   bearerToken: string,
 ): Promise<{ stream: MediaStream; pc: RTCPeerConnection }> {
   const pc = createPeerConnection();
+  const stream = new MediaStream();
+  let onTrackAdded: (() => void) | undefined;
 
-  const tracksPromise = new Promise<{ video: MediaStreamTrack; audio: MediaStreamTrack }>((res) => {
-    let videoTrack: MediaStreamTrack | undefined;
-    let audioTrack: MediaStreamTrack | undefined;
-    pc.ontrack = (ev) => {
-      if (ev.track.kind === "video") videoTrack = ev.track;
-      if (ev.track.kind === "audio") audioTrack = ev.track;
-      if (videoTrack && audioTrack) {
-        res({ video: videoTrack, audio: audioTrack });
-      }
-    };
-  });
+  pc.ontrack = (ev) => {
+    stream.addTrack(ev.track);
+    onTrackAdded?.();
+  };
 
   pc.addTransceiver("video", { direction: "recvonly" });
   pc.addTransceiver("audio", { direction: "recvonly" });
 
-  await negotiate(pc, endpointUrl, bearerToken);
+  try {
+    await negotiate(pc, endpointUrl, bearerToken);
 
-  const tracks = await tracksPromise;
-  const stream = new MediaStream();
-  stream.addTrack(tracks.video);
-  stream.addTrack(tracks.audio);
+    // We always offer both kinds, but the answer decides which ones actually carry
+    // media, so an audio-only or video-only stream leaves the other one inactive.
+    const expected = pc
+      .getTransceivers()
+      .filter((t) => t.currentDirection === "recvonly" || t.currentDirection === "sendrecv").length;
+    if (expected === 0) {
+      throw new Error("Server accepted neither audio nor video");
+    }
+
+    await new Promise<void>((res, rej) => {
+      if (stream.getTracks().length >= expected) {
+        res();
+        return;
+      }
+      const timeout = setTimeout(
+        () => rej(new Error(`Timed out waiting for ${expected} track(s) from the server`)),
+        TRACK_TIMEOUT_MS,
+      );
+      onTrackAdded = () => {
+        if (stream.getTracks().length >= expected) {
+          clearTimeout(timeout);
+          res();
+        }
+      };
+    });
+  } catch (err) {
+    pc.close();
+    throw err;
+  }
 
   return { stream, pc };
 }
