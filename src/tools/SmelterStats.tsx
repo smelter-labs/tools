@@ -100,7 +100,7 @@ interface LiveSyncTrack extends TrackBitrate {
   last_10_seconds: LiveSyncSlidingWindowStats;
 }
 
-/** Track synchronized by the input sync (`RTMP`, `HLS`). `null` until the track is registered. */
+/** Track synchronized by the input sync (`RTMP`, `HLS`, `MoQ`). `null` until the track is registered. */
 type InputSyncTrack = SimpleSyncTrack | LiveSyncTrack;
 
 interface StatsReport {
@@ -110,14 +110,18 @@ interface StatsReport {
 
 type InputStatsReport =
   | { type: "rtp" | "whip" | "whep"; video_rtp: RtpTrack; audio_rtp: RtpTrack }
-  | { type: "hls"; video?: InputSyncTrack | null; audio?: InputSyncTrack | null }
+  | {
+      type: "hls" | "moq_server" | "moq_client";
+      video?: InputSyncTrack | null;
+      audio?: InputSyncTrack | null;
+    }
   | {
       type: "rtmp";
       is_connected: boolean;
       video?: InputSyncTrack | null;
       audio?: InputSyncTrack | null;
     }
-  | { type: "mp4" | "moq_server" | "moq_client"; video: TrackBitrate; audio: TrackBitrate };
+  | { type: "mp4"; video: TrackBitrate; audio: TrackBitrate };
 
 type OutputStatsReport =
   | { type: "whep"; video: TrackBitrate; audio: TrackBitrate; connected_peers: number }
@@ -143,10 +147,10 @@ function getInputTracks(r: InputStatsReport): Tracks {
       return { video: r.video_rtp, audio: r.audio_rtp };
     case "hls":
     case "rtmp":
-      return { video: r.video ?? null, audio: r.audio ?? null };
-    case "mp4":
     case "moq_server":
     case "moq_client":
+      return { video: r.video ?? null, audio: r.audio ?? null };
+    case "mp4":
       return { video: r.video, audio: r.audio };
   }
 }
@@ -232,6 +236,8 @@ function inputTrackInfo(r: InputStatsReport): TrackInfo[] {
       return [rtpTrackInfo("Video", r.video_rtp), rtpTrackInfo("Audio", r.audio_rtp)];
     case "hls":
     case "rtmp":
+    case "moq_server":
+    case "moq_client":
       return [syncTrackInfo("Video", r.video), syncTrackInfo("Audio", r.audio)];
     default:
       return [];
@@ -332,6 +338,8 @@ function getInputBufferStats(
       };
     case "hls":
     case "rtmp":
+    case "moq_server":
+    case "moq_client":
       return { video: normalizeSync(r.video), audio: normalizeSync(r.audio) };
     default:
       return null;
