@@ -510,7 +510,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             codec: videoCodec,
             container:
               videoContainer === "cmaf"
-                ? { kind: "cmaf", init: videoInitB64!, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID }
+                ? {
+                    kind: "cmaf",
+                    init: videoInitB64!,
+                    timescale: Cmaf.TIMESCALE,
+                    trackId: Cmaf.TRACK_ID,
+                  }
                 : videoContainer === "loc"
                   ? { kind: "loc" }
                   : { kind: "legacy" },
@@ -533,7 +538,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
             codec: audioCodec,
             container:
               audioContainer === "cmaf"
-                ? { kind: "cmaf", init: audioInitB64!, timescale: Cmaf.TIMESCALE, trackId: Cmaf.TRACK_ID }
+                ? {
+                    kind: "cmaf",
+                    init: audioInitB64!,
+                    timescale: Cmaf.TIMESCALE,
+                    trackId: Cmaf.TRACK_ID,
+                  }
                 : audioContainer === "loc"
                   ? { kind: "loc" }
                   : { kind: "legacy" },
@@ -565,7 +575,9 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
         // the raw avcC only when the description is enabled. annexb: in-band.
         initData:
           videoContainer === "cmaf"
-            ? (videoCodecKind !== "annexb" ? videoInitB64! : undefined)
+            ? videoCodecKind !== "annexb"
+              ? videoInitB64!
+              : undefined
             : advertiseConfig
               ? (videoConfigB64 ?? undefined)
               : undefined,
@@ -591,109 +603,123 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   };
 
   // ---- 3. Encoders --------------------------------------------------------
-  const videoEncoder = videoEnabled ? new VideoEncoder({
-    output: (chunk, meta) => {
-      try {
-        if (!videoCatalogReady) {
-          const dc = meta?.decoderConfig;
-          videoW = dc?.codedWidth ?? videoW;
-          videoH = dc?.codedHeight ?? videoH;
-          // We need the avcC config when CMAF must build its mandatory init
-          // segment, or when avc1 is advertising the config out-of-band. Both
-          // arrive on the first keyframe's metadata, so wait for it.
-          if (videoCodecKind === "vp8" && videoContainer === "cmaf") {
-            // VP8 is self-describing (no decoderConfig.description). The CMAF
-            // init segment is built from dimensions alone; the vpcC config box
-            // lives inside it. Nothing to wait for.
-            videoInitB64 = Cmaf.videoInitBase64Vp8({ codedWidth: videoW, codedHeight: videoH });
-            videoCatalogReady = true;
-            maybeBuildCatalog();
-          } else if (videoCodecKind === "vp9" && videoContainer === "cmaf") {
-            // VP9 is self-describing (no decoderConfig.description). The CMAF
-            // init segment is built from dimensions alone; the vpcC config box
-            // lives inside it. Nothing to wait for.
-            videoInitB64 = Cmaf.videoInitBase64Vp9({ codedWidth: videoW, codedHeight: videoH });
-            videoCatalogReady = true;
-            maybeBuildCatalog();
-          } else if (videoCodecKind === "avc1" && (videoContainer === "cmaf" || advertiseConfig)) {
-            // avc1 signals SPS/PPS out-of-band via the avcC decoder config.
-            // Capture it so the catalog can advertise it (hex in hang
-            // `description`, base64 in legacy MSF `initData`). CMAF additionally
-            // wraps the avcC in a full MP4 init segment.
-            const desc = dc?.description;
-            if (desc) {
-              const avcC = Cmaf.toUint8(desc);
-              videoDescHex = Cmaf.bytesToHex(avcC);
-              videoConfigB64 = Cmaf.bytesToBase64(avcC);
-              if (videoContainer === "cmaf") {
-                videoInitB64 = Cmaf.videoInitBase64({ codedWidth: videoW, codedHeight: videoH, avcC });
+  const videoEncoder = videoEnabled
+    ? new VideoEncoder({
+        output: (chunk, meta) => {
+          try {
+            if (!videoCatalogReady) {
+              const dc = meta?.decoderConfig;
+              videoW = dc?.codedWidth ?? videoW;
+              videoH = dc?.codedHeight ?? videoH;
+              // We need the avcC config when CMAF must build its mandatory init
+              // segment, or when avc1 is advertising the config out-of-band. Both
+              // arrive on the first keyframe's metadata, so wait for it.
+              if (videoCodecKind === "vp8" && videoContainer === "cmaf") {
+                // VP8 is self-describing (no decoderConfig.description). The CMAF
+                // init segment is built from dimensions alone; the vpcC config box
+                // lives inside it. Nothing to wait for.
+                videoInitB64 = Cmaf.videoInitBase64Vp8({ codedWidth: videoW, codedHeight: videoH });
+                videoCatalogReady = true;
+                maybeBuildCatalog();
+              } else if (videoCodecKind === "vp9" && videoContainer === "cmaf") {
+                // VP9 is self-describing (no decoderConfig.description). The CMAF
+                // init segment is built from dimensions alone; the vpcC config box
+                // lives inside it. Nothing to wait for.
+                videoInitB64 = Cmaf.videoInitBase64Vp9({ codedWidth: videoW, codedHeight: videoH });
+                videoCatalogReady = true;
+                maybeBuildCatalog();
+              } else if (
+                videoCodecKind === "avc1" &&
+                (videoContainer === "cmaf" || advertiseConfig)
+              ) {
+                // avc1 signals SPS/PPS out-of-band via the avcC decoder config.
+                // Capture it so the catalog can advertise it (hex in hang
+                // `description`, base64 in legacy MSF `initData`). CMAF additionally
+                // wraps the avcC in a full MP4 init segment.
+                const desc = dc?.description;
+                if (desc) {
+                  const avcC = Cmaf.toUint8(desc);
+                  videoDescHex = Cmaf.bytesToHex(avcC);
+                  videoConfigB64 = Cmaf.bytesToBase64(avcC);
+                  if (videoContainer === "cmaf") {
+                    videoInitB64 = Cmaf.videoInitBase64({
+                      codedWidth: videoW,
+                      codedHeight: videoH,
+                      avcC,
+                    });
+                  }
+                  videoCatalogReady = true;
+                  maybeBuildCatalog();
+                }
+                // else: keep waiting for the config before the catalog is valid.
+              } else {
+                // Annex B (config in-band), or avc1+legacy with the description
+                // disabled: nothing to wait for, publish the catalog immediately.
+                videoCatalogReady = true;
+                maybeBuildCatalog();
               }
-              videoCatalogReady = true;
-              maybeBuildCatalog();
             }
-            // else: keep waiting for the config before the catalog is valid.
-          } else {
-            // Annex B (config in-band), or avc1+legacy with the description
-            // disabled: nothing to wait for, publish the catalog immediately.
-            videoCatalogReady = true;
-            maybeBuildCatalog();
+            writeVideoChunk(chunk);
+          } catch (e) {
+            fail(e);
           }
-        }
-        writeVideoChunk(chunk);
-      } catch (e) {
-        fail(e);
-      }
-    },
-    error: fail,
-  }) : null;
+        },
+        error: fail,
+      })
+    : null;
 
   const audioEncoder = audioEnabled
     ? new AudioEncoder({
-      output: (chunk, meta) => {
-        try {
-          if (audioContainer === "cmaf") {
-            if (!audioInitB64) {
-              const desc = meta?.decoderConfig?.description;
-              // Opus needs the WebCodecs OpusHead converted to dOps layout; AAC's
-              // AudioSpecificConfig passes through unchanged (see helper). The init
-              // segment always carries the ASC; whether it's also advertised in the
-              // catalog `description` is gated below.
-              const asc = desc ? audioDescriptionForCmaf(Cmaf.toUint8(desc), opts.audioCodec) : undefined;
-              if (asc) {
-                // opus: always advertise dOps (redundant with init). aac-raw: only
-                // when the audio toggle is on. aac-adts never reaches here (blocked
-                // upstream), but defensively leave the description null.
-                if (opts.audioCodec === "opus" || (opts.audioCodec === "aac-raw" && audioIncludeDescription)) {
-                  audioDescHex = Cmaf.bytesToHex(asc);
+        output: (chunk, meta) => {
+          try {
+            if (audioContainer === "cmaf") {
+              if (!audioInitB64) {
+                const desc = meta?.decoderConfig?.description;
+                // Opus needs the WebCodecs OpusHead converted to dOps layout; AAC's
+                // AudioSpecificConfig passes through unchanged (see helper). The init
+                // segment always carries the ASC; whether it's also advertised in the
+                // catalog `description` is gated below.
+                const asc = desc
+                  ? audioDescriptionForCmaf(Cmaf.toUint8(desc), opts.audioCodec)
+                  : undefined;
+                if (asc) {
+                  // opus: always advertise dOps (redundant with init). aac-raw: only
+                  // when the audio toggle is on. aac-adts never reaches here (blocked
+                  // upstream), but defensively leave the description null.
+                  if (
+                    opts.audioCodec === "opus" ||
+                    (opts.audioCodec === "aac-raw" && audioIncludeDescription)
+                  ) {
+                    audioDescHex = Cmaf.bytesToHex(asc);
+                  }
                 }
+                audioInitB64 = Cmaf.audioInitBase64({
+                  codec: audioCodec,
+                  sampleRate: audioSampleRate,
+                  numberOfChannels: audioChannels,
+                  asc,
+                });
+                audioCatalogReady = true;
+                maybeBuildCatalog();
               }
-              audioInitB64 = Cmaf.audioInitBase64({
-                codec: audioCodec,
-                sampleRate: audioSampleRate,
-                numberOfChannels: audioChannels,
-                asc,
-              });
+            } else if (!audioCatalogReady) {
+              // Legacy: ADTS (AAC) and raw Opus packets are self-describing, so no
+              // init segment is needed. For raw AAC, the ASC is advertised
+              // out-of-band in the catalog `description` when the toggle is on.
+              if (opts.audioCodec === "aac-raw" && audioIncludeDescription) {
+                const desc = meta?.decoderConfig?.description;
+                if (desc) audioDescHex = Cmaf.bytesToHex(Cmaf.toUint8(desc));
+              }
               audioCatalogReady = true;
               maybeBuildCatalog();
             }
-          } else if (!audioCatalogReady) {
-            // Legacy: ADTS (AAC) and raw Opus packets are self-describing, so no
-            // init segment is needed. For raw AAC, the ASC is advertised
-            // out-of-band in the catalog `description` when the toggle is on.
-            if (opts.audioCodec === "aac-raw" && audioIncludeDescription) {
-              const desc = meta?.decoderConfig?.description;
-              if (desc) audioDescHex = Cmaf.bytesToHex(Cmaf.toUint8(desc));
-            }
-            audioCatalogReady = true;
-            maybeBuildCatalog();
+            writeAudioChunk(chunk);
+          } catch (e) {
+            fail(e);
           }
-          writeAudioChunk(chunk);
-        } catch (e) {
-          fail(e);
-        }
-      },
-      error: fail,
-    })
+        },
+        error: fail,
+      })
     : null;
 
   function writeVideoChunk(chunk: EncodedVideoChunk) {
@@ -738,12 +764,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     const frameBytes =
       videoContainer === "cmaf"
         ? Cmaf.dataSegment({
-          data,
-          timestampUs: tsUs,
-          durationUs: chunk.duration ?? 1_000_000 / FRAMERATE,
-          keyframe: isKey,
-          sequence: videoSeq++,
-        })
+            data,
+            timestampUs: tsUs,
+            durationUs: chunk.duration ?? 1_000_000 / FRAMERATE,
+            keyframe: isKey,
+            sequence: videoSeq++,
+          })
         : Legacy.encodeFrame(data, tsUs as Time.Micro);
 
     if (bufferByGroup) {
@@ -782,12 +808,12 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
     const frameBytes =
       audioContainer === "cmaf"
         ? Cmaf.dataSegment({
-          data,
-          timestampUs: tsUs,
-          durationUs: chunk.duration ?? 0,
-          keyframe: true, // every AAC frame is independently decodable
-          sequence: audioSeq++,
-        })
+            data,
+            timestampUs: tsUs,
+            durationUs: chunk.duration ?? 0,
+            keyframe: true, // every AAC frame is independently decodable
+            sequence: audioSeq++,
+          })
         : Legacy.encodeFrame(data, tsUs as Time.Micro);
 
     // Default (no group size requested): one group per audio frame keeps
@@ -879,68 +905,73 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
   };
 
   if (videoEnabled && videoTrackIn && videoEncoder) {
-    const videoReader = new MediaStreamTrackProcessor<VideoFrame>({ track: videoTrackIn }).readable.getReader();
+    const videoReader = new MediaStreamTrackProcessor<VideoFrame>({
+      track: videoTrackIn,
+    }).readable.getReader();
     readers.push(videoReader);
     void (async () => {
-    try {
-      for (; ;) {
-        const { done, value } = await videoReader.read();
-        if (done || stopped) {
-          value?.close();
-          break;
+      try {
+        for (;;) {
+          const { done, value } = await videoReader.read();
+          if (done || stopped) {
+            value?.close();
+            break;
+          }
+          const frame = sizeFrame(value);
+          try {
+            if (videoEncoder.state === "unconfigured") {
+              const fps = opts.framerate ?? FRAMERATE;
+              videoW = frame.codedWidth;
+              videoH = frame.codedHeight;
+              videoCodec =
+                videoCodecKind === "vp8"
+                  ? "vp8"
+                  : videoCodecKind === "vp9"
+                    ? vp9CodecString(videoW, videoH, fps)
+                    : avcCodecString(videoW, videoH, fps);
+              videoEncoder.configure({
+                codec: videoCodec,
+                width: frame.codedWidth,
+                height: frame.codedHeight,
+                bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
+                framerate: fps,
+                latencyMode: "realtime",
+                // H.264 selects an avc/annexb bitstream format; VP8/VP9 are
+                // self-describing and take no codec-specific option.
+                ...(videoCodecKind === "vp8" || videoCodecKind === "vp9"
+                  ? {}
+                  : { avc: { format: videoCodecKind === "annexb" ? "annexb" : "avc" } as const }),
+              });
+            }
+            const ts = frame.timestamp;
+            const key =
+              forceKeyframe || lastKeyframeUs < 0 || ts - lastKeyframeUs >= keyframeIntervalUs;
+            if (key) {
+              lastKeyframeUs = ts;
+              forceKeyframe = false;
+            }
+            if (videoEncoder.state === "configured") {
+              videoEncoder.encode(frame, { keyFrame: key });
+              framesEncoded++;
+            }
+          } finally {
+            frame.close();
+          }
         }
-        const frame = sizeFrame(value);
-        try {
-          if (videoEncoder.state === "unconfigured") {
-            const fps = opts.framerate ?? FRAMERATE;
-            videoW = frame.codedWidth;
-            videoH = frame.codedHeight;
-            videoCodec =
-              videoCodecKind === "vp8"
-                ? "vp8"
-                : videoCodecKind === "vp9"
-                  ? vp9CodecString(videoW, videoH, fps)
-                  : avcCodecString(videoW, videoH, fps);
-            videoEncoder.configure({
-              codec: videoCodec,
-              width: frame.codedWidth,
-              height: frame.codedHeight,
-              bitrate: opts.videoBitrate ?? VIDEO_BITRATE,
-              framerate: fps,
-              latencyMode: "realtime",
-              // H.264 selects an avc/annexb bitstream format; VP8/VP9 are
-              // self-describing and take no codec-specific option.
-              ...(videoCodecKind === "vp8" || videoCodecKind === "vp9"
-                ? {}
-                : { avc: { format: videoCodecKind === "annexb" ? "annexb" : "avc" } as const }),
-            });
-          }
-          const ts = frame.timestamp;
-          const key = forceKeyframe || lastKeyframeUs < 0 || ts - lastKeyframeUs >= keyframeIntervalUs;
-          if (key) {
-            lastKeyframeUs = ts;
-            forceKeyframe = false;
-          }
-          if (videoEncoder.state === "configured") {
-            videoEncoder.encode(frame, { keyFrame: key });
-            framesEncoded++;
-          }
-        } finally {
-          frame.close();
-        }
+      } catch (e) {
+        if (!stopped) fail(e);
       }
-    } catch (e) {
-      if (!stopped) fail(e);
-    }
     })();
   }
 
   if (audioEnabled && audioTrackIn && audioEncoder) {
-    const audioReader = new MediaStreamTrackProcessor<AudioData>({ track: audioTrackIn }).readable.getReader();
+    const audioReader = new MediaStreamTrackProcessor<AudioData>({
+      track: audioTrackIn,
+    }).readable.getReader();
     readers.push(audioReader);
     void (async () => {
       try {
-        for (; ;) {
+        for (;;) {
           const { done, value } = await audioReader.read();
           if (done || stopped) {
             value?.close();
@@ -956,12 +987,8 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
                 sampleRate: audioSampleRate,
                 numberOfChannels: audioChannels,
                 bitrate: opts.audioBitrate ?? AUDIO_BITRATE,
-                ...(opts.audioCodec === "aac-adts"
-                  ? { aac: { format: "adts" } }
-                  : {}),
-                ...(opts.audioCodec === "opus" && opts.opusDtx
-                  ? { opus: { usedtx: true } }
-                  : {}),
+                ...(opts.audioCodec === "aac-adts" ? { aac: { format: "adts" } } : {}),
+                ...(opts.audioCodec === "opus" && opts.opusDtx ? { opus: { usedtx: true } } : {}),
               });
             }
             if (audioEncoder.state === "configured") {
@@ -1024,7 +1051,7 @@ export async function startPublishing(opts: PublishOptions): Promise<PublishHand
 
   void (async () => {
     try {
-      for (; ;) {
+      for (;;) {
         const req = await broadcast.requested();
         if (!req || stopped) break;
         const track = req.track;
