@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useSessionInput } from "../useSessionInput.ts";
-import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
+import { useSessionInput } from "../../ui/useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../../ui/SuggestInput.tsx";
+import { formatBitrate } from "../../ui/format.ts";
+import type { ToolMeta } from "../registry.ts";
 import {
   LineChart,
   Line,
@@ -157,12 +159,6 @@ function getInputTracks(r: InputStatsReport): Tracks {
 
 function getOutputTracks(r: OutputStatsReport): Tracks {
   return { video: r.video, audio: r.audio };
-}
-
-function formatBitrate(bps: number): string {
-  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mbps`;
-  if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} kbps`;
-  return `${bps} bps`;
 }
 
 function formatTrackBitrate(t: TrackBitrate | null): string {
@@ -460,6 +456,13 @@ function ConnectionIndicator({ connected }: { connected: boolean }) {
 }
 
 // ── Component ───────────────────────────────────────────────────────
+
+export const meta: ToolMeta = {
+  id: "smelter-stats",
+  name: "Smelter Stats",
+  description: "Real-time statistics dashboard",
+  scrollable: true,
+};
 
 export default function SmelterStats({ params }: { params: URLSearchParams }) {
   const [url, setUrl] = useSessionInput("stats:url", params, "url", "http://localhost:8081");

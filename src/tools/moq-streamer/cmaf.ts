@@ -226,15 +226,24 @@ function videoInitBase64Vpx(
   {
     const view = new DataView(mvhdContent.buffer);
     let o = 0;
-    view.setUint32(o, 0, false); o += 4; // creationTime
-    view.setUint32(o, 0, false); o += 4; // modificationTime
-    view.setUint32(o, timescale, false); o += 4;
-    view.setUint32(o, 0, false); o += 4; // duration
-    view.setUint32(o, 0x00010000, false); o += 4; // rate
-    view.setUint16(o, 0x0100, false); o += 2; // volume
+    view.setUint32(o, 0, false);
+    o += 4; // creationTime
+    view.setUint32(o, 0, false);
+    o += 4; // modificationTime
+    view.setUint32(o, timescale, false);
+    o += 4;
+    view.setUint32(o, 0, false);
+    o += 4; // duration
+    view.setUint32(o, 0x00010000, false);
+    o += 4; // rate
+    view.setUint16(o, 0x0100, false);
+    o += 2; // volume
     o += 2; // reserved
     o += 8; // reserved (2x uint32)
-    for (const m of IDENTITY_MATRIX) { view.setUint32(o, m >>> 0, false); o += 4; }
+    for (const m of IDENTITY_MATRIX) {
+      view.setUint32(o, m >>> 0, false);
+      o += 4;
+    }
     o += 24; // pre_defined (6x uint32)
     view.setUint32(o, trackId + 1, false); // nextTrackId
   }
@@ -245,18 +254,30 @@ function videoInitBase64Vpx(
   {
     const view = new DataView(tkhdContent.buffer);
     let o = 0;
-    view.setUint32(o, 0, false); o += 4; // creationTime
-    view.setUint32(o, 0, false); o += 4; // modificationTime
-    view.setUint32(o, trackId, false); o += 4;
-    view.setUint32(o, 0, false); o += 4; // reserved
-    view.setUint32(o, 0, false); o += 4; // duration
+    view.setUint32(o, 0, false);
+    o += 4; // creationTime
+    view.setUint32(o, 0, false);
+    o += 4; // modificationTime
+    view.setUint32(o, trackId, false);
+    o += 4;
+    view.setUint32(o, 0, false);
+    o += 4; // reserved
+    view.setUint32(o, 0, false);
+    o += 4; // duration
     o += 8; // reserved (2x uint32)
-    view.setUint16(o, 0, false); o += 2; // layer
-    view.setUint16(o, 0, false); o += 2; // alternateGroup
-    view.setUint16(o, 0, false); o += 2; // volume (0 for video)
+    view.setUint16(o, 0, false);
+    o += 2; // layer
+    view.setUint16(o, 0, false);
+    o += 2; // alternateGroup
+    view.setUint16(o, 0, false);
+    o += 2; // volume (0 for video)
     o += 2; // reserved
-    for (const m of IDENTITY_MATRIX) { view.setUint32(o, m >>> 0, false); o += 4; }
-    view.setUint32(o, codedWidth * 0x10000, false); o += 4; // width 16.16
+    for (const m of IDENTITY_MATRIX) {
+      view.setUint32(o, m >>> 0, false);
+      o += 4;
+    }
+    view.setUint32(o, codedWidth * 0x10000, false);
+    o += 4; // width 16.16
     view.setUint32(o, codedHeight * 0x10000, false); // height 16.16
   }
   const tkhd = fullBox("tkhd", 0, 0x000003, tkhdContent);
@@ -266,12 +287,17 @@ function videoInitBase64Vpx(
   {
     const view = new DataView(mdhdContent.buffer);
     let o = 0;
-    view.setUint32(o, 0, false); o += 4; // creationTime
-    view.setUint32(o, 0, false); o += 4; // modificationTime
-    view.setUint32(o, timescale, false); o += 4;
-    view.setUint32(o, 0, false); o += 4; // duration
+    view.setUint32(o, 0, false);
+    o += 4; // creationTime
+    view.setUint32(o, 0, false);
+    o += 4; // modificationTime
+    view.setUint32(o, timescale, false);
+    o += 4;
+    view.setUint32(o, 0, false);
+    o += 4; // duration
     // language "und" = 0x55c4, pre_defined = 0
-    view.setUint16(o, 0x55c4, false); o += 2;
+    view.setUint16(o, 0x55c4, false);
+    o += 2;
     view.setUint16(o, 0, false);
   }
   const mdhd = fullBox("mdhd", 0, 0, mdhdContent);

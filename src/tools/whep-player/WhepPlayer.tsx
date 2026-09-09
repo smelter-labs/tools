@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useSessionInput } from "../useSessionInput.ts";
-import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
-import { createPeerConnection, negotiate } from "../webrtc.ts";
+import { useSessionInput } from "../../ui/useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../../ui/SuggestInput.tsx";
+import { createPeerConnection, negotiate } from "../../lib/webrtc.ts";
+import type { ToolMeta } from "../registry.ts";
 
 const TRACK_TIMEOUT_MS = 10_000;
 
@@ -56,6 +57,13 @@ async function connectWhep(
 
   return { stream, pc };
 }
+
+export const meta: ToolMeta = {
+  id: "whep-player",
+  name: "WHEP Player",
+  description: "Receive and play a stream via WebRTC WHEP",
+  scrollable: false,
+};
 
 export default function WhepPlayer({ params }: { params: URLSearchParams }) {
   const [url, setUrl] = useSessionInput("whep:url", params, "url");

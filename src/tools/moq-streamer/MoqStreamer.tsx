@@ -1,6 +1,16 @@
 import { useState, useRef, useCallback, useEffect, type ReactNode } from "react";
-import { useSessionInput } from "../useSessionInput.ts";
-import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
+import { useSessionInput } from "../../ui/useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../../ui/SuggestInput.tsx";
+import {
+  Checkbox,
+  OptionGroup,
+  Select,
+  fieldStyle,
+  inputStyle,
+  labelStyle,
+  selectOptions,
+} from "../../ui/form.tsx";
+import type { ToolMeta } from "../registry.ts";
 import {
   startPublishing,
   type PublishHandle,
@@ -10,7 +20,7 @@ import {
   type AudioCodec,
   type VideoCodec,
   type ContainerKind,
-} from "../moq/publisher.ts";
+} from "./publisher.ts";
 
 const NONE = "none";
 const SCREEN = "screen";
@@ -93,11 +103,12 @@ const AUDIO_BITRATES: Record<string, { label: string; bps?: number }> = {
   "32": { label: "32 kbps", bps: 32_000 },
 };
 
-function selectOptions<T extends { label: string }>(
-  rec: Record<string, T>,
-): { value: string; label: string }[] {
-  return Object.entries(rec).map(([value, { label }]) => ({ value, label }));
-}
+export const meta: ToolMeta = {
+  id: "moq-streamer",
+  name: "MoQ Streamer",
+  description: "Publish camera or screen as H264 + AAC over Media-over-QUIC",
+  scrollable: false,
+};
 
 export default function MoqStreamer({ params }: { params: URLSearchParams }) {
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
@@ -240,7 +251,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       if (!Number.isFinite(ms) || ms <= 0) {
         setStatus({
           state: "error",
-          message: "Keyframe interval must be a positive number of milliseconds (or empty for default).",
+          message:
+            "Keyframe interval must be a positive number of milliseconds (or empty for default).",
         });
         return;
       }
@@ -253,7 +265,8 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       if (!Number.isFinite(ms) || ms <= 0) {
         setStatus({
           state: "error",
-          message: "Audio group size must be a positive number of milliseconds (or empty for default).",
+          message:
+            "Audio group size must be a positive number of milliseconds (or empty for default).",
         });
         return;
       }
@@ -309,7 +322,7 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
       refreshDevices();
       if (videoRef.current) {
         videoRef.current.srcObject = handle.stream;
-        videoRef.current.play().catch(() => { });
+        videoRef.current.play().catch(() => {});
       }
     } catch (err) {
       setStatus({ state: "error", message: err instanceof Error ? err.message : String(err) });
@@ -382,28 +395,28 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
         }}
       >
         <OptionGroup label="Video">
-          <SourceSelect
+          <Select
             label="Source"
             value={source}
             options={SOURCE_OPTIONS}
             onChange={setSource}
             disabled={disabled}
           />
-          <SourceSelect
+          <Select
             label="Resolution"
             value={resolution}
             options={selectOptions(RESOLUTIONS)}
             onChange={setResolution}
             disabled={videoDisabled}
           />
-          <SourceSelect
+          <Select
             label="Framerate"
             value={framerate}
             options={selectOptions(FRAMERATES)}
             onChange={setFramerate}
             disabled={videoDisabled}
           />
-          <SourceSelect
+          <Select
             label="Max bitrate"
             value={videoBitrate}
             options={selectOptions(VIDEO_BITRATES)}
@@ -417,21 +430,21 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
             placeholder="Default"
             disabled={videoDisabled}
           />
-          <SourceSelect
+          <Select
             label="Content hint"
             value={contentHint}
             options={selectOptions(CONTENT_HINTS)}
             onChange={setContentHint}
             disabled={videoDisabled}
           />
-          <SourceSelect
+          <Select
             label="Codec"
             value={videoCodec}
             options={VIDEO_CODECS}
             onChange={setVideoCodec}
             disabled={videoDisabled}
           />
-          <SourceSelect
+          <Select
             label="Container"
             value={videoContainer}
             options={CONTAINERS}
@@ -480,28 +493,28 @@ export default function MoqStreamer({ params }: { params: URLSearchParams }) {
           />
         </OptionGroup>
         <OptionGroup label="Audio">
-          <SourceSelect
+          <Select
             label="Source"
             value={audioSource}
             options={audioOptions}
             onChange={setAudioSource}
             disabled={disabled}
           />
-          <SourceSelect
+          <Select
             label="Codec"
             value={audioCodec}
             options={AUDIO_CODECS}
             onChange={setAudioCodec}
             disabled={disabled}
           />
-          <SourceSelect
+          <Select
             label="Max bitrate"
             value={audioBitrate}
             options={selectOptions(AUDIO_BITRATES)}
             onChange={setAudioBitrate}
             disabled={disabled}
           />
-          <SourceSelect
+          <Select
             label="Container"
             value={audioContainer}
             options={CONTAINERS}
@@ -695,68 +708,6 @@ function StatusLine({ status }: { status: PublishStatus }) {
   return <span style={{ fontSize: "0.9rem", fontWeight: 500, color }}>{text}</span>;
 }
 
-function OptionGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <fieldset
-      style={{
-        flex: 1,
-        minWidth: 280,
-        border: "1px solid var(--border, #444)",
-        borderRadius: 6,
-        padding: "0.5rem 1rem 1rem",
-        margin: 0,
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "1rem",
-        alignItems: "flex-start",
-      }}
-    >
-      <legend
-        style={{
-          padding: "0 0.5rem",
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
-        {label}
-      </legend>
-      {children}
-    </fieldset>
-  );
-}
-
-function Checkbox({
-  label,
-  checked,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: "0.9rem",
-        cursor: disabled ? "default" : "pointer",
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      {label}
-    </label>
-  );
-}
-
 function TextField({
   label,
   value,
@@ -771,16 +722,8 @@ function TextField({
   disabled?: boolean;
 }): ReactNode {
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200 }}>
-      <label
-        style={{
-          marginBottom: 4,
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
-        {label}
-      </label>
+    <div style={fieldStyle}>
+      <label style={labelStyle}>{label}</label>
       <input
         type="number"
         inputMode="numeric"
@@ -789,7 +732,7 @@ function TextField({
         disabled={disabled}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
+        style={inputStyle}
       />
     </div>
   );
@@ -824,16 +767,8 @@ function PtsOffsetField({
   };
   const pending = applied !== offset;
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200 }}>
-      <label
-        style={{
-          marginBottom: 4,
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
-        PTS offset
-      </label>
+    <div style={fieldStyle}>
+      <label style={labelStyle}>PTS offset</label>
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <button onClick={() => onAdjust(-PTS_OFFSET_STEP_S)} disabled={disabled} style={button}>
           −{PTS_OFFSET_STEP_S}
@@ -854,49 +789,11 @@ function PtsOffsetField({
         </button>
       </div>
       {/* Always rendered so appearing/disappearing text can't jog the layout. */}
-      <span style={{ marginTop: 4, minHeight: "1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}>
+      <span
+        style={{ marginTop: 4, minHeight: "1rem", fontSize: "0.75rem", color: "var(--text-muted)" }}
+      >
         {pending ? `sending ${formatOffset(applied)} until the next keyframe` : ""}
       </span>
-    </div>
-  );
-}
-
-function SourceSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (value: T) => void;
-  disabled?: boolean;
-}): ReactNode {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200 }}>
-      <label
-        style={{
-          marginBottom: 4,
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
-        {label}
-      </label>
-      <select
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value as T)}
-        style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
     </div>
   );
 }

@@ -1,51 +1,5 @@
 import { useState, useEffect } from "react";
-import SmelterStats from "./tools/SmelterStats.tsx";
-import WhipStreamer from "./tools/WhipStreamer.tsx";
-import WhepPlayer from "./tools/WhepPlayer.tsx";
-import MoqStreamer from "./tools/MoqStreamer.tsx";
-import MoqPlayer from "./tools/MoqPlayer.tsx";
-import WavInspector from "./tools/WavInspector.tsx";
-
-const TOOLS = [
-  {
-    id: "smelter-stats",
-    name: "Smelter Stats",
-    description: "Real-time statistics dashboard",
-    scrollable: true,
-  },
-  {
-    id: "whip-streamer",
-    name: "WHIP Streamer",
-    description: "Stream screen or camera via WebRTC WHIP",
-    scrollable: false,
-  },
-  {
-    id: "whep-player",
-    name: "WHEP Player",
-    description: "Receive and play a stream via WebRTC WHEP",
-    scrollable: false,
-  },
-  {
-    id: "moq-streamer",
-    name: "MoQ Streamer",
-    description: "Publish camera or screen as H264 + AAC over Media-over-QUIC",
-    scrollable: false,
-  },
-  {
-    id: "moq-player",
-    name: "MoQ Player",
-    description: "Play a MoQ broadcast from a relay",
-    scrollable: false,
-  },
-  {
-    id: "wav-inspector",
-    name: "WAV Inspector",
-    description: "Inspect WAV files and compare waveforms sample-by-sample",
-    scrollable: false,
-  },
-] as const;
-
-type ToolId = (typeof TOOLS)[number]["id"];
+import { TOOLS } from "./tools/registry.ts";
 
 interface HashRoute {
   path: string;
@@ -67,23 +21,6 @@ function useHashRoute(): HashRoute {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
   return route;
-}
-
-function ToolPage({ id, params }: { id: ToolId; params: URLSearchParams }) {
-  switch (id) {
-    case "smelter-stats":
-      return <SmelterStats params={params} />;
-    case "whip-streamer":
-      return <WhipStreamer params={params} />;
-    case "whep-player":
-      return <WhepPlayer params={params} />;
-    case "moq-streamer":
-      return <MoqStreamer params={params} />;
-    case "moq-player":
-      return <MoqPlayer params={params} />;
-    case "wav-inspector":
-      return <WavInspector params={params} />;
-  }
 }
 
 export default function App() {
@@ -113,7 +50,7 @@ export default function App() {
           <h1 style={{ marginTop: "0.5rem" }}>{activeTool.name}</h1>
         </div>
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <ToolPage id={activeTool.id} params={params} />
+          <activeTool.component params={params} />
         </div>
       </div>
     );
