@@ -49,7 +49,15 @@ interface SimpleSyncTrack extends TrackBitrate {
   state: SimpleSyncTrackState;
 }
 
-type LiveSyncTrackState = "waiting_for_start" | "started_shared" | "started_track";
+/**
+ * - `waiting_for_start`: chunks are held back until the live edge is estimated.
+ * - `started_shared`: timestamp offset is shared with the other track; the buffer is sized from the
+ *   live edge of both tracks combined.
+ * - `started_independent`: tracks are on unrelated timelines. The leader (audio when it runs) sizes
+ *   the buffer from its own live edge; the secondary track follows the leader, shifted by the
+ *   distance between their live edges.
+ */
+type LiveSyncTrackState = "waiting_for_start" | "started_shared" | "started_independent";
 
 interface LiveSyncSlidingWindowStats {
   discontinuities_detected: number;
@@ -82,20 +90,24 @@ interface LiveSyncTrack extends TrackBitrate {
   state: LiveSyncTrackState;
   discontinuities_detected: number;
   /**
-   * Remaining shift of the playback position to reach the target buffer.
-   * Positive when the buffer is being shrunk, negative when grown, zero when converged.
+   * Remaining shift of the playback position until the timestamp offset of the track reaches its
+   * target. Positive when the buffer is being shrunk, negative when grown, zero when converged.
+   * For the secondary track of `started_independent` it is the remaining shift relative to the
+   * leader's final position.
    */
   target_offset_distance_seconds: number;
   /**
    * How far the playback position is behind the pessimistic live edge estimate (content arriving
    * as slow as the slowest recent chunk). Margin before playback runs out of content.
-   * `null` before the track starts.
+   * Measured against the estimate of both tracks combined in `started_shared` and of this track
+   * alone in `started_independent`. `null` before the track starts.
    */
   live_edge_lower_bound_distance_seconds?: number | null;
   /**
    * How far the playback position is behind the optimistic live edge estimate (content arriving
    * as fast as the fastest recent chunk). Total latency introduced by the synchronization.
-   * `null` before the track starts.
+   * Measured against the estimate of both tracks combined in `started_shared` and of this track
+   * alone in `started_independent`. `null` before the track starts.
    */
   live_edge_upper_bound_distance_seconds?: number | null;
   buffer: LiveSyncBuffer;
