@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import type { ToolMeta } from "../registry.ts";
 
 interface WavData {
   fileName: string;
@@ -590,6 +591,13 @@ interface SlotState {
 
 const EMPTY_SLOT: SlotState = { wav: null, error: null, loading: false };
 
+export const meta: ToolMeta = {
+  id: "wav-inspector",
+  name: "WAV Inspector",
+  description: "Inspect WAV files and compare waveforms sample-by-sample",
+  scrollable: false,
+};
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export default function WavInspector(_props: { params: URLSearchParams }) {
   const [slotA, setSlotA] = useState<SlotState>(EMPTY_SLOT);
@@ -866,7 +874,13 @@ export default function WavInspector(_props: { params: URLSearchParams }) {
           )}
 
           {slotA.wav && slotB.wav && (
-            <DiffSummary a={slotA.wav} b={slotB.wav} offsetB={offsetB} range={range} onClearRange={() => setRange(null)} />
+            <DiffSummary
+              a={slotA.wav}
+              b={slotB.wav}
+              offsetB={offsetB}
+              range={range}
+              onClearRange={() => setRange(null)}
+            />
           )}
         </>
       )}

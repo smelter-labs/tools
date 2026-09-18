@@ -1,7 +1,9 @@
-import { useState, useRef, useCallback, useEffect, type ReactNode } from "react";
-import { useSessionInput } from "../useSessionInput.ts";
-import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
-import { createPeerConnection, negotiate } from "../webrtc.ts";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { useSessionInput } from "../../ui/useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../../ui/SuggestInput.tsx";
+import { Checkbox, OptionGroup, Select, selectOptions } from "../../ui/form.tsx";
+import { createPeerConnection, negotiate } from "../../lib/webrtc.ts";
+import type { ToolMeta } from "../registry.ts";
 
 const NONE = "none";
 const SCREEN = "screen";
@@ -111,12 +113,6 @@ async function applyDegradationPreference(
   }
 }
 
-function selectOptions<T extends { label: string }>(
-  rec: Record<string, T>,
-): { value: string; label: string }[] {
-  return Object.entries(rec).map(([value, { label }]) => ({ value, label }));
-}
-
 type AudioProcessing = {
   echoCancellation: boolean;
   noiseSuppression: boolean;
@@ -171,6 +167,13 @@ async function acquireInitialTracks(
   ]);
   return { video, audio };
 }
+
+export const meta: ToolMeta = {
+  id: "whip-streamer",
+  name: "WHIP Streamer",
+  description: "Stream screen or camera via WebRTC WHIP",
+  scrollable: false,
+};
 
 export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   const [url, setUrl] = useSessionInput("whip:url", params, "url");
@@ -539,31 +542,31 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         }}
       >
         <OptionGroup label="Video">
-          <SourceSelect
+          <Select
             label="Source"
             value={videoSource}
             options={videoOptions}
             onChange={handleVideoSourceChange}
           />
-          <SourceSelect
+          <Select
             label="Resolution"
             value={resolution}
             options={selectOptions(RESOLUTIONS)}
             onChange={handleResolutionChange}
           />
-          <SourceSelect
+          <Select
             label="Framerate"
             value={framerate}
             options={selectOptions(FRAMERATES)}
             onChange={handleFramerateChange}
           />
-          <SourceSelect
+          <Select
             label="Max bitrate"
             value={videoBitrate}
             options={selectOptions(VIDEO_BITRATES)}
             onChange={handleVideoBitrateChange}
           />
-          <SourceSelect
+          <Select
             label="Degradation preference"
             value={degradationPreference}
             options={selectOptions(DEGRADATION_PREFERENCES)}
@@ -571,13 +574,13 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
           />
         </OptionGroup>
         <OptionGroup label="Audio">
-          <SourceSelect
+          <Select
             label="Source"
             value={audioSource}
             options={audioOptions}
             onChange={handleAudioSourceChange}
           />
-          <SourceSelect
+          <Select
             label="Max bitrate"
             value={audioBitrate}
             options={selectOptions(AUDIO_BITRATES)}
@@ -669,98 +672,6 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
           style={{ maxWidth: "100%", maxHeight: "100%", width: "100%", height: "100%" }}
         />
       </div>
-    </div>
-  );
-}
-
-function OptionGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <fieldset
-      style={{
-        flex: 1,
-        minWidth: 280,
-        border: "1px solid var(--border, #444)",
-        borderRadius: 6,
-        padding: "0.5rem 1rem 1rem",
-        margin: 0,
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "1rem",
-        alignItems: "flex-start",
-      }}
-    >
-      <legend
-        style={{
-          padding: "0 0.5rem",
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
-        {label}
-      </legend>
-      {children}
-    </fieldset>
-  );
-}
-
-function Checkbox({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: "0.9rem",
-        cursor: "pointer",
-      }}
-    >
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      {label}
-    </label>
-  );
-}
-
-function SourceSelect<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 200 }}>
-      <label
-        style={{
-          marginBottom: 4,
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
-        {label}
-      </label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-        style={{ width: "100%", padding: "0.5rem", fontSize: "1rem", boxSizing: "border-box" }}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
     </div>
   );
 }

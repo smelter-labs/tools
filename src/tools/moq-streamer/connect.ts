@@ -65,7 +65,7 @@ export async function connectRelay(opts: RelayConnectOptions): Promise<Net.Conne
         // A pinned hash that doesn't match the relay's actual certificate.
         throw new Error(
           `Connection failed: the self-signed cert SHA-256 fingerprint does not match the relay's certificate. ` +
-          `Re-copy the fingerprint, or clear it to use standard TLS verification. (${detail})`,
+            `Re-copy the fingerprint, or clear it to use standard TLS verification. (${detail})`,
           { cause: e },
         );
       }
@@ -73,7 +73,7 @@ export async function connectRelay(opts: RelayConnectOptions): Promise<Net.Conne
       // uses a self-signed certificate the browser won't trust.
       throw new Error(
         `Connection failed: TLS verification failed. If the relay uses a self-signed certificate, ` +
-        `paste its SHA-256 fingerprint into the cert field. (${detail})`,
+          `paste its SHA-256 fingerprint into the cert field. (${detail})`,
         { cause: e },
       );
     }
@@ -141,7 +141,10 @@ function errorDetail(err: Error): string {
  */
 function isCertHashError(err: Error): boolean {
   const errors = flattenErrors(err);
-  if (typeof WebTransportError !== "undefined" && errors.some((e) => e instanceof WebTransportError)) {
+  if (
+    typeof WebTransportError !== "undefined" &&
+    errors.some((e) => e instanceof WebTransportError)
+  ) {
     return true;
   }
   return errors.some((e) => /cert|certificate|hash|fingerprint|handshake|tls/i.test(e.message));

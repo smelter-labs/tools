@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useSessionInput } from "../useSessionInput.ts";
-import SuggestInput, { saveToHistory } from "../SuggestInput.tsx";
+import { useSessionInput } from "../../ui/useSessionInput.ts";
+import SuggestInput, { saveToHistory } from "../../ui/SuggestInput.tsx";
+import { formatBitrate } from "../../ui/format.ts";
+import type { ToolMeta } from "../registry.ts";
 import {
   LineChart,
   Line,
@@ -47,7 +49,15 @@ interface SimpleSyncTrack extends TrackBitrate {
   state: SimpleSyncTrackState;
 }
 
-type LiveSyncTrackState = "waiting_for_start" | "started_shared" | "started_track";
+/**
+ * - `waiting_for_start`: chunks are held back until the live edge is estimated.
+ * - `started_shared`: timestamp offset is shared with the other track; the buffer is sized from the
+ *   live edge of both tracks combined.
+ * - `started_independent`: tracks are on unrelated timelines. The leader (audio when it runs) sizes
+ *   the buffer from its own live edge; the secondary track follows the leader, shifted by the
+ *   distance between their live edges.
+ */
+type LiveSyncTrackState = "waiting_for_start" | "started_shared" | "started_independent";
 
 interface LiveSyncSlidingWindowStats {
   discontinuities_detected: number;
@@ -80,27 +90,31 @@ interface LiveSyncTrack extends TrackBitrate {
   state: LiveSyncTrackState;
   discontinuities_detected: number;
   /**
-   * Remaining shift of the playback position to reach the target buffer.
-   * Positive when the buffer is being shrunk, negative when grown, zero when converged.
+   * Remaining shift of the playback position until the timestamp offset of the track reaches its
+   * target. Positive when the buffer is being shrunk, negative when grown, zero when converged.
+   * For the secondary track of `started_independent` it is the remaining shift relative to the
+   * leader's final position.
    */
   target_offset_distance_seconds: number;
   /**
    * How far the playback position is behind the pessimistic live edge estimate (content arriving
    * as slow as the slowest recent chunk). Margin before playback runs out of content.
-   * `null` before the track starts.
+   * Measured against the estimate of both tracks combined in `started_shared` and of this track
+   * alone in `started_independent`. `null` before the track starts.
    */
   live_edge_lower_bound_distance_seconds?: number | null;
   /**
    * How far the playback position is behind the optimistic live edge estimate (content arriving
    * as fast as the fastest recent chunk). Total latency introduced by the synchronization.
-   * `null` before the track starts.
+   * Measured against the estimate of both tracks combined in `started_shared` and of this track
+   * alone in `started_independent`. `null` before the track starts.
    */
   live_edge_upper_bound_distance_seconds?: number | null;
   buffer: LiveSyncBuffer;
   last_10_seconds: LiveSyncSlidingWindowStats;
 }
 
-/** Track synchronized by the input sync (`RTMP`, `HLS`). `null` until the track is registered. */
+/** Track synchronized by the input sync (`RTMP`, `HLS`, `MoQ`). `null` until the track is registered. */
 type InputSyncTrack = SimpleSyncTrack | LiveSyncTrack;
 
 interface StatsReport {
@@ -110,14 +124,18 @@ interface StatsReport {
 
 type InputStatsReport =
   | { type: "rtp" | "whip" | "whep"; video_rtp: RtpTrack; audio_rtp: RtpTrack }
-  | { type: "hls"; video?: InputSyncTrack | null; audio?: InputSyncTrack | null }
+  | {
+      type: "hls" | "moq_server" | "moq_client";
+      video?: InputSyncTrack | null;
+      audio?: InputSyncTrack | null;
+    }
   | {
       type: "rtmp";
       is_connected: boolean;
       video?: InputSyncTrack | null;
       audio?: InputSyncTrack | null;
     }
-  | { type: "mp4" | "moq_server" | "moq_client"; video: TrackBitrate; audio: TrackBitrate };
+  | { type: "mp4"; video: TrackBitrate; audio: TrackBitrate };
 
 type OutputStatsReport =
   | { type: "whep"; video: TrackBitrate; audio: TrackBitrate; connected_peers: number }
@@ -143,22 +161,16 @@ function getInputTracks(r: InputStatsReport): Tracks {
       return { video: r.video_rtp, audio: r.audio_rtp };
     case "hls":
     case "rtmp":
-      return { video: r.video ?? null, audio: r.audio ?? null };
-    case "mp4":
     case "moq_server":
     case "moq_client":
+      return { video: r.video ?? null, audio: r.audio ?? null };
+    case "mp4":
       return { video: r.video, audio: r.audio };
   }
 }
 
 function getOutputTracks(r: OutputStatsReport): Tracks {
   return { video: r.video, audio: r.audio };
-}
-
-function formatBitrate(bps: number): string {
-  if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(2)} Mbps`;
-  if (bps >= 1_000) return `${(bps / 1_000).toFixed(1)} kbps`;
-  return `${bps} bps`;
 }
 
 function formatTrackBitrate(t: TrackBitrate | null): string {
@@ -232,6 +244,8 @@ function inputTrackInfo(r: InputStatsReport): TrackInfo[] {
       return [rtpTrackInfo("Video", r.video_rtp), rtpTrackInfo("Audio", r.audio_rtp)];
     case "hls":
     case "rtmp":
+    case "moq_server":
+    case "moq_client":
       return [syncTrackInfo("Video", r.video), syncTrackInfo("Audio", r.audio)];
     default:
       return [];
@@ -332,6 +346,8 @@ function getInputBufferStats(
       };
     case "hls":
     case "rtmp":
+    case "moq_server":
+    case "moq_client":
       return { video: normalizeSync(r.video), audio: normalizeSync(r.audio) };
     default:
       return null;
@@ -452,6 +468,13 @@ function ConnectionIndicator({ connected }: { connected: boolean }) {
 }
 
 // ── Component ───────────────────────────────────────────────────────
+
+export const meta: ToolMeta = {
+  id: "smelter-stats",
+  name: "Smelter Stats",
+  description: "Real-time statistics dashboard",
+  scrollable: true,
+};
 
 export default function SmelterStats({ params }: { params: URLSearchParams }) {
   const [url, setUrl] = useSessionInput("stats:url", params, "url", "http://localhost:8081");
