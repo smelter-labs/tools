@@ -66,7 +66,7 @@ export default function App() {
           gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
         }}
       >
-        {TOOLS.map((tool) => (
+        {TOOLS.filter((tool) => !tool.hidden).map((tool) => (
           <a
             key={tool.id}
             href={`#${tool.id}`}

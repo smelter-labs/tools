@@ -17,6 +17,8 @@ export interface ToolMeta {
   description: string;
   /** Whether the page scrolls as a document or fills the viewport with its own layout. */
   scrollable: boolean;
+  /** Keeps the route working but leaves the tool out of the landing-page cards. */
+  hidden?: boolean;
 }
 
 export interface Tool extends ToolMeta {
@@ -27,7 +29,7 @@ export const TOOLS: Tool[] = [
   { ...smelterStats, component: SmelterStats },
   { ...whipStreamer, component: WhipStreamer },
   { ...whepPlayer, component: WhepPlayer },
-  { ...moqStreamer, component: MoqStreamer },
+  { ...moqStreamer, component: MoqStreamer, hidden: true },
   { ...moqPublish, component: MoqPublish },
   { ...moqPlayer, component: MoqPlayer },
   { ...wavInspector, component: WavInspector },
