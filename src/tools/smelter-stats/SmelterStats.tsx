@@ -110,6 +110,14 @@ interface LiveSyncTrack extends TrackBitrate {
    * alone in `started_independent`. `null` before the track starts.
    */
   live_edge_upper_bound_distance_seconds?: number | null;
+  /**
+   * Like `live_edge_upper_bound_distance_seconds`, but the estimate only looks back over the last
+   * few seconds instead of the full window, so it reacts to a latency change within seconds.
+   * Never larger than the full-window value; it drops below it when the stream slipped (content
+   * arriving slower than real time) and the full window still remembers the earlier, faster
+   * delivery. `null` before the track starts or when nothing arrived within the window.
+   */
+  live_edge_recent_upper_bound_distance_seconds?: number | null;
   buffer: LiveSyncBuffer;
   last_10_seconds: LiveSyncSlidingWindowStats;
 }
@@ -230,6 +238,10 @@ function syncTrackInfo(label: string, t: InputSyncTrack | null | undefined): Tra
         name: "live edge (upper)",
         value: formatOptionalSeconds(t.live_edge_upper_bound_distance_seconds),
       },
+      {
+        name: "live edge (recent upper)",
+        value: formatOptionalSeconds(t.live_edge_recent_upper_bound_distance_seconds),
+      },
       { name: "discont.", value: String(t.discontinuities_detected) },
       { name: "discont. (10s)", value: String(t.last_10_seconds.discontinuities_detected) },
     ],
@@ -295,6 +307,8 @@ interface NormalizedBufferStats {
   live_edge_lower_bound_seconds: number | null;
   /** Live sync only: distance behind the optimistic live edge estimate (total sync latency). */
   live_edge_upper_bound_seconds: number | null;
+  /** Live sync only: upper bound estimated over the last few seconds only (reacts to latency changes fast). */
+  live_edge_recent_upper_bound_seconds: number | null;
 }
 
 const EMPTY_BUFFER_STATS: NormalizedBufferStats = {
@@ -305,6 +319,7 @@ const EMPTY_BUFFER_STATS: NormalizedBufferStats = {
   target_offset_distance_seconds: null,
   live_edge_lower_bound_seconds: null,
   live_edge_upper_bound_seconds: null,
+  live_edge_recent_upper_bound_seconds: null,
 };
 
 function normalizeRtp(s: RtpSlidingWindowBufferStats): NormalizedBufferStats {
@@ -316,6 +331,7 @@ function normalizeRtp(s: RtpSlidingWindowBufferStats): NormalizedBufferStats {
     target_offset_distance_seconds: null,
     live_edge_lower_bound_seconds: null,
     live_edge_upper_bound_seconds: null,
+    live_edge_recent_upper_bound_seconds: null,
   };
 }
 
@@ -330,6 +346,7 @@ function normalizeSync(t: InputSyncTrack | null | undefined): NormalizedBufferSt
     target_offset_distance_seconds: t.target_offset_distance_seconds,
     live_edge_lower_bound_seconds: t.live_edge_lower_bound_distance_seconds ?? null,
     live_edge_upper_bound_seconds: t.live_edge_upper_bound_distance_seconds ?? null,
+    live_edge_recent_upper_bound_seconds: t.live_edge_recent_upper_bound_distance_seconds ?? null,
   };
 }
 
@@ -376,8 +393,10 @@ interface BufferPoint {
   audio_target_offset: number;
   video_live_edge_lower: number;
   video_live_edge_upper: number;
+  video_live_edge_recent_upper: number;
   audio_live_edge_lower: number;
   audio_live_edge_upper: number;
+  audio_live_edge_recent_upper: number;
 }
 
 const MAX_CHART_POINTS = 300;
@@ -527,6 +546,8 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
               video_target_offset: bufferStats.video.target_offset_distance_seconds ?? NaN,
               video_live_edge_lower: bufferStats.video.live_edge_lower_bound_seconds ?? NaN,
               video_live_edge_upper: bufferStats.video.live_edge_upper_bound_seconds ?? NaN,
+              video_live_edge_recent_upper:
+                bufferStats.video.live_edge_recent_upper_bound_seconds ?? NaN,
               audio_input_buffer: bufferStats.audio.input_buffer_avg_seconds ?? NaN,
               audio_effective_buffer_on_enter:
                 bufferStats.audio.effective_buffer_on_enter_min_seconds ?? NaN,
@@ -536,6 +557,8 @@ export default function SmelterStats({ params }: { params: URLSearchParams }) {
               audio_target_offset: bufferStats.audio.target_offset_distance_seconds ?? NaN,
               audio_live_edge_lower: bufferStats.audio.live_edge_lower_bound_seconds ?? NaN,
               audio_live_edge_upper: bufferStats.audio.live_edge_upper_bound_seconds ?? NaN,
+              audio_live_edge_recent_upper:
+                bufferStats.audio.live_edge_recent_upper_bound_seconds ?? NaN,
             },
           ];
         }
@@ -705,8 +728,10 @@ function BufferChart({ data }: { data: BufferPoint[] }) {
     audio_target_offset: toMs(d.audio_target_offset),
     video_live_edge_lower: toMs(d.video_live_edge_lower),
     video_live_edge_upper: toMs(d.video_live_edge_upper),
+    video_live_edge_recent_upper: toMs(d.video_live_edge_recent_upper),
     audio_live_edge_lower: toMs(d.audio_live_edge_lower),
     audio_live_edge_upper: toMs(d.audio_live_edge_upper),
+    audio_live_edge_recent_upper: toMs(d.audio_live_edge_recent_upper),
   }));
   const has = (key: keyof (typeof chartData)[number]) =>
     chartData.some((d) => Number.isFinite(d[key] as number));
@@ -889,6 +914,18 @@ function BufferChart({ data }: { data: BufferPoint[] }) {
               isAnimationActive={false}
             />
           )}
+          {has("video_live_edge_recent_upper") && (
+            <Line
+              type="monotone"
+              dataKey="video_live_edge_recent_upper"
+              name="Video Live Edge (recent upper bound)"
+              stroke="#d05070"
+              strokeWidth={1.5}
+              strokeDasharray="2 3"
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
           {has("audio_live_edge_lower") && (
             <Line
               type="monotone"
@@ -908,6 +945,18 @@ function BufferChart({ data }: { data: BufferPoint[] }) {
               stroke="#c07020"
               strokeWidth={2}
               strokeDasharray="5 5"
+              dot={false}
+              isAnimationActive={false}
+            />
+          )}
+          {has("audio_live_edge_recent_upper") && (
+            <Line
+              type="monotone"
+              dataKey="audio_live_edge_recent_upper"
+              name="Audio Live Edge (recent upper bound)"
+              stroke="#c07020"
+              strokeWidth={1.5}
+              strokeDasharray="2 3"
               dot={false}
               isAnimationActive={false}
             />
