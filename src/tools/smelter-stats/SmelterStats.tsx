@@ -71,16 +71,41 @@ interface LiveSyncSlidingWindowStats {
   effective_buffer_on_output_min_seconds: number;
 }
 
-type LiveSyncBuffer = { type: "fifo"; duration_seconds: number };
+/** Content currently held in the sync buffer. */
+type LiveSyncBuffer =
+  /** FIFO sync buffer (`RTMP`, `HLS`). */
+  | { type: "fifo"; duration_seconds: number }
+  /** Sync buffer that reorders out-of-order delivery (`MoQ`). */
+  | {
+      type: "jitter";
+      duration_seconds: number;
+      /** Whether the next chunk is held back behind a gap that might still be filled. */
+      waiting_for_gap: boolean;
+    };
 
 /**
  * Duration of the content held by the sync buffer for the chart, or `null` when it should not be
- * plotted. FIFO buffers are shown only as text in the card, not on the graph.
+ * plotted. FIFO buffers are shown only as text in the card, not on the graph; jitter buffers are
+ * plotted because their size reflects reordering and gap waits.
  */
 function chartedSyncBufferSeconds(b: LiveSyncBuffer): number | null {
   switch (b.type) {
     case "fifo":
       return null;
+    case "jitter":
+      return b.duration_seconds;
+  }
+}
+
+function syncBufferFields(b: LiveSyncBuffer): { name: string; value: string }[] {
+  switch (b.type) {
+    case "fifo":
+      return [{ name: "sync buffer", value: formatSeconds(b.duration_seconds) }];
+    case "jitter":
+      return [
+        { name: "jitter buffer", value: formatSeconds(b.duration_seconds) },
+        { name: "waiting for gap", value: b.waiting_for_gap ? "yes" : "no" },
+      ];
   }
 }
 
@@ -228,7 +253,7 @@ function syncTrackInfo(label: string, t: InputSyncTrack | null | undefined): Tra
     fields: [
       { name: "mode", value: "live" },
       { name: "state", value: t.state },
-      { name: "sync buffer", value: formatSeconds(t.buffer.duration_seconds) },
+      ...syncBufferFields(t.buffer),
       { name: "target offset", value: formatSeconds(t.target_offset_distance_seconds) },
       {
         name: "live edge (lower)",
