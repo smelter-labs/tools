@@ -60,6 +60,8 @@ interface AudioMixerCounters {
   gaps_inserted: number;
   /** Audio dropped because input timestamps fell behind the received audio by more than 500ms. */
   drops: number;
+  /** Part of a silent passage cut out because input timestamps fell behind the received audio. */
+  silence_cuts: number;
   /** End of input audio extended with generated audio to cover a gap. */
   concealments: number;
   fade_ins: number;
@@ -311,6 +313,7 @@ const MIXER_COUNTERS: { key: keyof AudioMixerCounters; label: string }[] = [
   { key: "underruns", label: "underruns" },
   { key: "gaps_inserted", label: "gaps" },
   { key: "drops", label: "drops" },
+  { key: "silence_cuts", label: "silence cuts" },
   { key: "concealments", label: "conceal." },
   { key: "fade_ins", label: "fade ins" },
   { key: "fade_outs", label: "fade outs" },
