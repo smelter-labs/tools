@@ -1,14 +1,33 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useSessionInput } from "../../ui/useSessionInput.ts";
 import SuggestInput, { saveToHistory } from "../../ui/SuggestInput.tsx";
-import { Checkbox, OptionGroup, Select, selectOptions } from "../../ui/form.tsx";
+import {
+  Checkbox,
+  OptionGroup,
+  Select,
+  deviceOptions,
+  groupRowStyle,
+  selectOptions,
+} from "../../ui/form.tsx";
 import { createPeerConnection, negotiate } from "../../lib/webrtc.ts";
 import type { ToolMeta } from "../registry.ts";
 
 const NONE = "none";
-const SCREEN = "screen";
 const CAMERA = "camera";
-const MICROPHONE = "microphone";
+const SCREEN = "screen";
+type Source = typeof NONE | typeof CAMERA | typeof SCREEN;
+
+const SOURCES: { value: Source; label: string }[] = [
+  { value: NONE, label: "None" },
+  { value: CAMERA, label: "Camera + microphone" },
+  { value: SCREEN, label: "Screen" },
+];
+
+type ScreenAudio = "screen" | "microphone";
+const SCREEN_AUDIO: { value: ScreenAudio; label: string }[] = [
+  { value: "screen", label: "Screen audio" },
+  { value: "microphone", label: "Microphone" },
+];
 
 const RESOLUTIONS: Record<string, { label: string; width?: number; height?: number }> = {
   auto: { label: "Auto" },
@@ -67,23 +86,6 @@ function videoConstraints(resolution: string, framerate: string): MediaTrackCons
   return out;
 }
 
-async function getVideoTrack(
-  source: string,
-  resolution: string,
-  framerate: string,
-): Promise<MediaStreamTrack | null> {
-  if (source === NONE) return null;
-  const res = videoConstraints(resolution, framerate);
-  if (source === SCREEN) {
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: { ...res } });
-    return s.getVideoTracks()[0] ?? null;
-  }
-  const constraint: MediaTrackConstraints =
-    source === CAMERA ? { ...res } : { deviceId: { exact: source }, ...res };
-  const s = await navigator.mediaDevices.getUserMedia({ video: constraint });
-  return s.getVideoTracks()[0] ?? null;
-}
-
 async function applyMaxBitrate(sender: RTCRtpSender, bps: number | undefined) {
   const params = sender.getParameters();
   if (!params.encodings || params.encodings.length === 0) {
@@ -113,59 +115,60 @@ async function applyDegradationPreference(
   }
 }
 
-type AudioProcessing = {
-  echoCancellation: boolean;
-  noiseSuppression: boolean;
-  autoGainControl: boolean;
+// Chromium's screen-capture extensions, not in TypeScript's DOM types yet. Without a
+// controller set to "no-focus-change" the browser switches to a tab or window the moment it
+// is picked for sharing. Same options as @moq/publish uses.
+interface CaptureController {
+  setFocusBehavior(behavior: "focus-captured-surface" | "no-focus-change"): void;
+}
+const CaptureControllerCtor = (globalThis as { CaptureController?: new () => CaptureController })
+  .CaptureController;
+type DisplayMediaOptions = DisplayMediaStreamOptions & {
+  controller?: CaptureController;
+  preferCurrentTab?: boolean;
+  selfBrowserSurface?: "include" | "exclude";
+  surfaceSwitching?: "include" | "exclude";
 };
 
-function audioConstraints(processing: AudioProcessing): MediaTrackConstraints {
-  return {
-    echoCancellation: processing.echoCancellation,
-    noiseSuppression: processing.noiseSuppression,
-    autoGainControl: processing.autoGainControl,
+function stopTracks(stream: MediaStream) {
+  stream.getTracks().forEach((t) => t.stop());
+}
+
+/**
+ * Runs one capture for an effect and returns the effect's cleanup, which stops the captured
+ * tracks (or the late result of a capture the user has since moved on from) and drops the
+ * error of a capture that failed.
+ */
+function runCapture(
+  capture: () => Promise<MediaStream>,
+  setStream: (stream: MediaStream | null) => void,
+  setError: (error: string | null) => void,
+): () => void {
+  let cancelled = false;
+  let failed = false;
+  let stream: MediaStream | null = null;
+  capture().then(
+    (s) => {
+      if (cancelled) {
+        stopTracks(s);
+        return;
+      }
+      stream = s;
+      setStream(s);
+      setError(null);
+    },
+    (err) => {
+      if (cancelled) return;
+      failed = true;
+      setError(err instanceof Error ? err.message : String(err));
+    },
+  );
+  return () => {
+    cancelled = true;
+    if (stream) stopTracks(stream);
+    if (failed) setError(null);
+    setStream(null);
   };
-}
-
-async function getAudioTrack(
-  source: string,
-  processing: AudioProcessing,
-): Promise<MediaStreamTrack | null> {
-  if (source === NONE) return null;
-  if (source === SCREEN) {
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    s.getVideoTracks().forEach((t) => t.stop());
-    return s.getAudioTracks()[0] ?? null;
-  }
-  const proc = audioConstraints(processing);
-  const constraint: MediaTrackConstraints =
-    source === MICROPHONE ? { ...proc } : { deviceId: { exact: source }, ...proc };
-  const s = await navigator.mediaDevices.getUserMedia({ audio: constraint });
-  return s.getAudioTracks()[0] ?? null;
-}
-
-async function acquireInitialTracks(
-  videoSource: string,
-  audioSource: string,
-  resolution: string,
-  framerate: string,
-  audioProcessing: AudioProcessing,
-): Promise<{ video: MediaStreamTrack | null; audio: MediaStreamTrack | null }> {
-  if (videoSource === SCREEN && audioSource === SCREEN) {
-    const s = await navigator.mediaDevices.getDisplayMedia({
-      video: { ...videoConstraints(resolution, framerate) },
-      audio: true,
-    });
-    return {
-      video: s.getVideoTracks()[0] ?? null,
-      audio: s.getAudioTracks()[0] ?? null,
-    };
-  }
-  const [video, audio] = await Promise.all([
-    getVideoTrack(videoSource, resolution, framerate),
-    getAudioTrack(audioSource, audioProcessing),
-  ]);
-  return { video, audio };
 }
 
 export const meta: ToolMeta = {
@@ -178,20 +181,33 @@ export const meta: ToolMeta = {
 export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   const [url, setUrl] = useSessionInput("whip:url", params, "url");
   const [token, setToken] = useSessionInput("whip:token", params, "token");
-  const [videoSource, setVideoSource] = useState<string>(SCREEN);
-  const [audioSource, setAudioSource] = useState<string>(NONE);
+
+  // ---- Source -------------------------------------------------------------
+  const [source, setSource] = useState<Source>(NONE);
+  const [videoEnabled, setVideoEnabled] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [screenAudio, setScreenAudio] = useState<ScreenAudio>("screen");
+
+  // ---- Capture ------------------------------------------------------------
+  const [cameraDevice, setCameraDevice] = useState("");
+  const [micDevice, setMicDevice] = useState("");
   const [resolution, setResolution] = useState<string>("auto");
   const [framerate, setFramerate] = useState<string>("auto");
+  const [echoCancellation, setEchoCancellation] = useState(true);
+  const [noiseSuppression, setNoiseSuppression] = useState(true);
+  const [autoGainControl, setAutoGainControl] = useState(true);
+
+  // ---- Encoding -----------------------------------------------------------
   const [videoBitrate, setVideoBitrate] = useState<string>("auto");
   const [audioBitrate, setAudioBitrate] = useState<string>("auto");
   const [degradationPreference, setDegradationPreference] = useState<string>("default");
-  const [audioProcessing, setAudioProcessing] = useState<AudioProcessing>({
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-  });
+
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [displayStream, setDisplayStream] = useState<MediaStream | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [micStream, setMicStream] = useState<MediaStream | null>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -199,8 +215,6 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const videoSenderRef = useRef<RTCRtpSender | null>(null);
   const audioSenderRef = useRef<RTCRtpSender | null>(null);
-  const currentVideoTrackRef = useRef<MediaStreamTrack | null>(null);
-  const currentAudioTrackRef = useRef<MediaStreamTrack | null>(null);
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -219,87 +233,130 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     return () => navigator.mediaDevices.removeEventListener("devicechange", refreshDevices);
   }, [refreshDevices]);
 
-  const namedVideoDevices = videoDevices.filter((d) => d.deviceId && d.label);
-  const namedAudioDevices = audioDevices.filter((d) => d.deviceId && d.label);
-  const videoOptions = [
-    { value: NONE, label: "None" },
-    { value: SCREEN, label: "Screen share" },
-    ...(namedVideoDevices.length > 0
-      ? namedVideoDevices.map((d) => ({ value: d.deviceId, label: d.label }))
-      : [{ value: CAMERA, label: "Camera" }]),
-  ];
-  const audioOptions = [
-    { value: NONE, label: "None" },
-    { value: SCREEN, label: "Screen audio" },
-    ...(namedAudioDevices.length > 0
-      ? namedAudioDevices.map((d) => ({ value: d.deviceId, label: d.label }))
-      : [{ value: MICROPHONE, label: "Microphone" }]),
-  ];
+  // ---- Capture whatever the form selects, as soon as it is selected --------
+  // Screen, camera and microphone are captured independently, so changing one device does not
+  // re-open the others. Screen video and screen audio come from one getDisplayMedia call
+  // (the browser only offers its audio alongside a picked surface).
+  const screenAudioWanted = source === SCREEN && audioEnabled && screenAudio === "screen";
+  const displayWanted = source === SCREEN && (videoEnabled || screenAudioWanted);
+  const cameraWanted = source === CAMERA && videoEnabled;
+  const micWanted =
+    audioEnabled && (source === CAMERA || (source === SCREEN && screenAudio === "microphone"));
 
-  const updatePreview = useCallback(() => {
+  useEffect(() => {
+    if (!displayWanted) return;
+    const capture = async () => {
+      const controller = CaptureControllerCtor ? new CaptureControllerCtor() : undefined;
+      controller?.setFocusBehavior("no-focus-change");
+      const options: DisplayMediaOptions = {
+        video: true,
+        audio: screenAudioWanted,
+        controller,
+        preferCurrentTab: false,
+        selfBrowserSurface: "exclude",
+        surfaceSwitching: "include",
+      };
+      const s = await navigator.mediaDevices.getDisplayMedia(options);
+      // The browser's own "Stop sharing" button ends the track without going through us.
+      s.getVideoTracks()[0]?.addEventListener("ended", () => setSource(NONE));
+      return s;
+    };
+    return runCapture(capture, setDisplayStream, setCaptureError);
+  }, [displayWanted, screenAudioWanted]);
+
+  useEffect(() => {
+    if (!cameraWanted) return;
+    const capture = () =>
+      navigator.mediaDevices.getUserMedia({
+        video: cameraDevice ? { deviceId: { exact: cameraDevice } } : true,
+      });
+    const setStream = (s: MediaStream | null) => {
+      setCameraStream(s);
+      // Device labels only show up once the page holds a capture permission.
+      if (s) refreshDevices();
+    };
+    return runCapture(capture, setStream, setCaptureError);
+  }, [cameraWanted, cameraDevice, refreshDevices]);
+
+  useEffect(() => {
+    if (!micWanted) return;
+    const capture = () =>
+      navigator.mediaDevices.getUserMedia({
+        audio: {
+          ...(micDevice ? { deviceId: { exact: micDevice } } : {}),
+          echoCancellation,
+          noiseSuppression,
+          autoGainControl,
+        },
+      });
+    const setStream = (s: MediaStream | null) => {
+      setMicStream(s);
+      if (s) refreshDevices();
+    };
+    return runCapture(capture, setStream, setCaptureError);
+  }, [micWanted, micDevice, echoCancellation, noiseSuppression, autoGainControl, refreshDevices]);
+
+  const videoTrack =
+    (displayWanted && videoEnabled
+      ? displayStream?.getVideoTracks()[0]
+      : cameraWanted
+        ? cameraStream?.getVideoTracks()[0]
+        : undefined) ?? null;
+  const audioTrack =
+    (screenAudioWanted
+      ? displayStream?.getAudioTracks()[0]
+      : micWanted
+        ? micStream?.getAudioTracks()[0]
+        : undefined) ?? null;
+
+  // Resolution and framerate are applied to the live track rather than re-captured, so
+  // changing them does not bring the screen picker back up.
+  useEffect(() => {
+    videoTrack?.applyConstraints(videoConstraints(resolution, framerate)).catch((err) => {
+      setCaptureError(err instanceof Error ? err.message : String(err));
+    });
+  }, [videoTrack, resolution, framerate]);
+
+  // ---- Feed the tracks to the preview and, while streaming, to the senders -
+  useEffect(() => {
     if (!videoRef.current) return;
     const stream = new MediaStream();
-    if (currentVideoTrackRef.current) stream.addTrack(currentVideoTrackRef.current);
-    if (currentAudioTrackRef.current) stream.addTrack(currentAudioTrackRef.current);
-    videoRef.current.srcObject = stream;
-  }, []);
+    if (videoTrack) stream.addTrack(videoTrack);
+    if (audioTrack) stream.addTrack(audioTrack);
+    videoRef.current.srcObject = stream.getTracks().length > 0 ? stream : null;
+  }, [videoTrack, audioTrack]);
 
-  const cleanup = useCallback(() => {
-    currentVideoTrackRef.current?.stop();
-    currentVideoTrackRef.current = null;
-    currentAudioTrackRef.current?.stop();
-    currentAudioTrackRef.current = null;
+  useEffect(() => {
+    videoSenderRef.current?.replaceTrack(videoTrack).catch(() => {});
+  }, [videoTrack]);
+  useEffect(() => {
+    audioSenderRef.current?.replaceTrack(audioTrack).catch(() => {});
+  }, [audioTrack]);
+
+  const stopStream = useCallback(() => {
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
     }
     videoSenderRef.current = null;
     audioSenderRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
     setStreaming(false);
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  useEffect(() => stopStream, [stopStream]);
 
   const startStream = useCallback(async () => {
     if (!url) {
       setStatus("Please enter a WHIP endpoint URL.");
       return;
     }
-    if (videoSource === "none" && audioSource === "none") {
+    if (!videoTrack && !audioTrack) {
       setStatus("Select at least one media source.");
       return;
     }
-    cleanup();
+    stopStream();
     saveToHistory("whip:url", url);
     saveToHistory("whip:token", token);
-    setStatus("Acquiring sources...");
-
-    let tracks: { video: MediaStreamTrack | null; audio: MediaStreamTrack | null };
-    try {
-      tracks = await acquireInitialTracks(
-        videoSource,
-        audioSource,
-        resolution,
-        framerate,
-        audioProcessing,
-      );
-    } catch (err) {
-      setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    currentVideoTrackRef.current = tracks.video;
-    currentAudioTrackRef.current = tracks.audio;
-    if (videoSource === CAMERA && tracks.video) {
-      const id = tracks.video.getSettings().deviceId;
-      if (id) setVideoSource(id);
-    }
-    if (audioSource === MICROPHONE && tracks.audio) {
-      const id = tracks.audio.getSettings().deviceId;
-      if (id) setAudioSource(id);
-    }
-    refreshDevices();
-
     setStatus("Connecting...");
     try {
       const pc = createPeerConnection();
@@ -317,12 +374,12 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
       videoSenderRef.current = videoTransceiver.sender;
       audioSenderRef.current = audioTransceiver.sender;
 
-      if (tracks.video) await videoTransceiver.sender.replaceTrack(tracks.video);
-      if (tracks.audio) await audioTransceiver.sender.replaceTrack(tracks.audio);
+      if (videoTrack) await videoTransceiver.sender.replaceTrack(videoTrack);
+      if (audioTrack) await audioTransceiver.sender.replaceTrack(audioTrack);
 
       pc.addEventListener("connectionstatechange", () => {
         if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-          cleanup();
+          stopStream();
           setStatus("Connection lost");
         }
       });
@@ -337,90 +394,22 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         DEGRADATION_PREFERENCES[degradationPreference]?.value,
       );
 
-      updatePreview();
       setStreaming(true);
       setStatus("Streaming");
     } catch (err) {
-      cleanup();
+      stopStream();
       setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [
     url,
     token,
-    videoSource,
-    audioSource,
-    resolution,
-    framerate,
+    videoTrack,
+    audioTrack,
     videoBitrate,
     audioBitrate,
     degradationPreference,
-    audioProcessing,
-    cleanup,
-    updatePreview,
-    refreshDevices,
+    stopStream,
   ]);
-
-  const handleVideoSourceChange = useCallback(
-    async (newSource: string) => {
-      setVideoSource(newSource);
-      if (!pcRef.current || !videoSenderRef.current) return;
-      setStatus("Switching video source...");
-      try {
-        const newTrack = await getVideoTrack(newSource, resolution, framerate);
-        currentVideoTrackRef.current?.stop();
-        currentVideoTrackRef.current = newTrack;
-        await videoSenderRef.current.replaceTrack(newTrack);
-        if (newSource === CAMERA && newTrack) {
-          const id = newTrack.getSettings().deviceId;
-          if (id) setVideoSource(id);
-        }
-        updatePreview();
-        refreshDevices();
-        setStatus("Streaming");
-      } catch (err) {
-        setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    [resolution, framerate, updatePreview, refreshDevices],
-  );
-
-  const handleResolutionChange = useCallback(
-    async (newResolution: string) => {
-      setResolution(newResolution);
-      if (!pcRef.current || !videoSenderRef.current || videoSource === NONE) return;
-      setStatus("Switching resolution...");
-      try {
-        const newTrack = await getVideoTrack(videoSource, newResolution, framerate);
-        currentVideoTrackRef.current?.stop();
-        currentVideoTrackRef.current = newTrack;
-        await videoSenderRef.current.replaceTrack(newTrack);
-        updatePreview();
-        setStatus("Streaming");
-      } catch (err) {
-        setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    [videoSource, framerate, updatePreview],
-  );
-
-  const handleFramerateChange = useCallback(
-    async (newFramerate: string) => {
-      setFramerate(newFramerate);
-      if (!pcRef.current || !videoSenderRef.current || videoSource === NONE) return;
-      setStatus("Switching framerate...");
-      try {
-        const newTrack = await getVideoTrack(videoSource, resolution, newFramerate);
-        currentVideoTrackRef.current?.stop();
-        currentVideoTrackRef.current = newTrack;
-        await videoSenderRef.current.replaceTrack(newTrack);
-        updatePreview();
-        setStatus("Streaming");
-      } catch (err) {
-        setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    [videoSource, resolution, updatePreview],
-  );
 
   const handleVideoBitrateChange = useCallback(async (newBitrate: string) => {
     setVideoBitrate(newBitrate);
@@ -436,30 +425,6 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     }
   }, []);
 
-  const handleAudioSourceChange = useCallback(
-    async (newSource: string) => {
-      setAudioSource(newSource);
-      if (!pcRef.current || !audioSenderRef.current) return;
-      setStatus("Switching audio source...");
-      try {
-        const newTrack = await getAudioTrack(newSource, audioProcessing);
-        currentAudioTrackRef.current?.stop();
-        currentAudioTrackRef.current = newTrack;
-        await audioSenderRef.current.replaceTrack(newTrack);
-        if (newSource === MICROPHONE && newTrack) {
-          const id = newTrack.getSettings().deviceId;
-          if (id) setAudioSource(id);
-        }
-        updatePreview();
-        refreshDevices();
-        setStatus("Streaming");
-      } catch (err) {
-        setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-    [audioProcessing, updatePreview, refreshDevices],
-  );
-
   const handleDegradationPreferenceChange = useCallback(async (newPref: string) => {
     setDegradationPreference(newPref);
     if (videoSenderRef.current) {
@@ -470,32 +435,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
     }
   }, []);
 
-  const handleAudioProcessingChange = useCallback(
-    async (key: keyof AudioProcessing, value: boolean) => {
-      const next = { ...audioProcessing, [key]: value };
-      setAudioProcessing(next);
-      if (!pcRef.current || !audioSenderRef.current || audioSource === NONE) return;
-      const track = currentAudioTrackRef.current;
-      if (!track) return;
-      try {
-        await track.applyConstraints(audioConstraints(next));
-      } catch {
-        // Some sources (e.g. screen audio) ignore these — re-acquire as a fallback.
-        try {
-          setStatus("Updating audio processing...");
-          const newTrack = await getAudioTrack(audioSource, next);
-          currentAudioTrackRef.current?.stop();
-          currentAudioTrackRef.current = newTrack;
-          await audioSenderRef.current.replaceTrack(newTrack);
-          updatePreview();
-          setStatus("Streaming");
-        } catch (err) {
-          setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    },
-    [audioProcessing, audioSource, updatePreview],
-  );
+  const message = captureError ? `Error: ${captureError}` : status;
 
   return (
     <div
@@ -532,36 +472,24 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         />
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          gap: "1rem",
-          flexWrap: "wrap",
-          marginBottom: "1rem",
-          flexShrink: 0,
-        }}
-      >
-        <OptionGroup label="Video">
+      <div style={groupRowStyle}>
+        <OptionGroup label="Source">
+          <Select label="Source" value={source} options={SOURCES} onChange={setSource} />
+          {source === SCREEN && (
+            <Select
+              label="Audio source"
+              value={screenAudio}
+              options={SCREEN_AUDIO}
+              onChange={setScreenAudio}
+            />
+          )}
+          <Checkbox label="Video" checked={videoEnabled} onChange={setVideoEnabled} />
+          <Checkbox label="Audio" checked={audioEnabled} onChange={setAudioEnabled} />
+        </OptionGroup>
+
+        <OptionGroup label="Encoding">
           <Select
-            label="Source"
-            value={videoSource}
-            options={videoOptions}
-            onChange={handleVideoSourceChange}
-          />
-          <Select
-            label="Resolution"
-            value={resolution}
-            options={selectOptions(RESOLUTIONS)}
-            onChange={handleResolutionChange}
-          />
-          <Select
-            label="Framerate"
-            value={framerate}
-            options={selectOptions(FRAMERATES)}
-            onChange={handleFramerateChange}
-          />
-          <Select
-            label="Max bitrate"
+            label="Video max bitrate"
             value={videoBitrate}
             options={selectOptions(VIDEO_BITRATES)}
             onChange={handleVideoBitrateChange}
@@ -572,48 +500,66 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
             options={selectOptions(DEGRADATION_PREFERENCES)}
             onChange={handleDegradationPreferenceChange}
           />
-        </OptionGroup>
-        <OptionGroup label="Audio">
           <Select
-            label="Source"
-            value={audioSource}
-            options={audioOptions}
-            onChange={handleAudioSourceChange}
-          />
-          <Select
-            label="Max bitrate"
+            label="Audio max bitrate"
             value={audioBitrate}
             options={selectOptions(AUDIO_BITRATES)}
             onChange={handleAudioBitrateChange}
           />
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-              flex: 1,
-              minWidth: 200,
-            }}
-          >
-            <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Processing</span>
-            <Checkbox
-              label="Echo cancellation"
-              checked={audioProcessing.echoCancellation}
-              onChange={(v) => handleAudioProcessingChange("echoCancellation", v)}
-            />
-            <Checkbox
-              label="Noise suppression"
-              checked={audioProcessing.noiseSuppression}
-              onChange={(v) => handleAudioProcessingChange("noiseSuppression", v)}
-            />
-            <Checkbox
-              label="Auto gain control"
-              checked={audioProcessing.autoGainControl}
-              onChange={(v) => handleAudioProcessingChange("autoGainControl", v)}
-            />
-          </div>
         </OptionGroup>
       </div>
+
+      {source !== NONE && (
+        <div style={groupRowStyle}>
+          <OptionGroup label={source === CAMERA ? "Camera capture" : "Screen capture"}>
+            {source === CAMERA && (
+              <Select
+                label="Device"
+                value={cameraDevice}
+                options={deviceOptions(videoDevices)}
+                onChange={setCameraDevice}
+              />
+            )}
+            <Select
+              label="Resolution"
+              value={resolution}
+              options={selectOptions(RESOLUTIONS)}
+              onChange={setResolution}
+            />
+            <Select
+              label="Framerate"
+              value={framerate}
+              options={selectOptions(FRAMERATES)}
+              onChange={setFramerate}
+            />
+          </OptionGroup>
+          {(source === CAMERA || screenAudio === "microphone") && (
+            <OptionGroup label="Microphone capture">
+              <Select
+                label="Device"
+                value={micDevice}
+                options={deviceOptions(audioDevices)}
+                onChange={setMicDevice}
+              />
+              <Checkbox
+                label="Echo cancellation"
+                checked={echoCancellation}
+                onChange={setEchoCancellation}
+              />
+              <Checkbox
+                label="Noise suppression"
+                checked={noiseSuppression}
+                onChange={setNoiseSuppression}
+              />
+              <Checkbox
+                label="Auto gain control"
+                checked={autoGainControl}
+                onChange={setAutoGainControl}
+              />
+            </OptionGroup>
+          )}
+        </div>
+      )}
 
       <div
         style={{
@@ -633,7 +579,7 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         ) : (
           <button
             onClick={() => {
-              cleanup();
+              stopStream();
               setStatus(null);
             }}
             style={{ padding: "0.5rem 1.5rem", fontSize: "1rem", cursor: "pointer" }}
@@ -643,14 +589,14 @@ export default function WhipStreamer({ params }: { params: URLSearchParams }) {
         )}
       </div>
 
-      {status && (
+      {message && (
         <p
           style={{
-            color: status.startsWith("Error") ? "var(--error)" : "var(--text-muted)",
+            color: message.startsWith("Error") ? "var(--error)" : "var(--text-muted)",
             margin: "0 0 1rem",
           }}
         >
-          {status}
+          {message}
         </p>
       )}
 

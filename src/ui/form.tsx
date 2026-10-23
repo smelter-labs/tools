@@ -45,6 +45,17 @@ export function selectOptions<T extends { label: string }>(
   return Object.entries(rec).map(([value, { label }]) => ({ value, label }));
 }
 
+/** Capture devices as `<Select>` options, led by "Default" (the empty device id). Devices
+ *  the page has no permission for yet come back without an id, so they are left out. */
+export function deviceOptions(devices: MediaDeviceInfo[]): { value: string; label: string }[] {
+  return [
+    { value: "", label: "Default" },
+    ...devices
+      .filter((d) => d.deviceId)
+      .map((d) => ({ value: d.deviceId, label: d.label || `Device ${d.deviceId.slice(0, 8)}` })),
+  ];
+}
+
 /** Parses a numeric text field; empty or invalid means "leave the default". */
 export function optionalNumber(raw: string): number | undefined {
   const trimmed = raw.trim();

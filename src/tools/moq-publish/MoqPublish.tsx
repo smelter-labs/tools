@@ -9,6 +9,7 @@ import {
   OptionGroup,
   Select,
   buttonStyle,
+  deviceOptions,
   fieldStyle,
   groupRowStyle,
   labelStyle,
@@ -635,15 +636,6 @@ function PublishForm({ publisher, params }: { publisher: Publisher; params: URLS
       </div>
     </div>
   );
-}
-
-function deviceOptions(devices: MediaDeviceInfo[]): { value: string; label: string }[] {
-  return [
-    { value: "", label: "Default" },
-    ...devices
-      .filter((d) => d.deviceId)
-      .map((d) => ({ value: d.deviceId, label: d.label || `Device ${d.deviceId.slice(0, 8)}` })),
-  ];
 }
 
 function StatusLine({
