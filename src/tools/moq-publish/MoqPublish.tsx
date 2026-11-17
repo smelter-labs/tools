@@ -171,7 +171,7 @@ export default function MoqPublish({ params }: { params: URLSearchParams }) {
 }
 
 function PublishForm({ publisher, params }: { publisher: Publisher; params: URLSearchParams }) {
-  // ---- Connection (same query params and history as the MoQ Streamer) -----
+  // ---- Connection -------------------------------------------------------
   const [serverUrl, setServerUrl] = useSessionInput("moq:url", params, "url");
   const [token, setToken] = useSessionInput("moq:token", params, "token");
   const [broadcastPath, setBroadcastPath] = useSessionInput("moq:path", params, "path");
@@ -181,7 +181,7 @@ function PublishForm({ publisher, params }: { publisher: Publisher; params: URLS
   // ---- Broadcast ----------------------------------------------------------
   const [announce, setAnnounce] = useState<AnnounceMode>("catalog");
   const [flip, setFlip] = useState(false);
-  const [latencyMax, setLatencyMax] = useState("");
+  const [maxAge, setMaxAge] = useState("");
 
   // ---- Source -------------------------------------------------------------
   const [source, setSource] = useState<SourceOption>(NONE);
@@ -230,7 +230,10 @@ function PublishForm({ publisher, params }: { publisher: Publisher; params: URLS
   useEffect(() => publisher.preview.set(preview), [publisher, preview]);
   useEffect(() => publisher.announce.set(announce), [publisher, announce]);
   useEffect(() => publisher.flip.set(flip), [publisher, flip]);
-  useEffect(() => publisher.latencyMax.set(optionalNumber(latencyMax)), [publisher, latencyMax]);
+  useEffect(() => {
+    const ms = optionalNumber(maxAge);
+    publisher.maxAge.set(ms !== undefined ? Net.Time.Milli(ms) : undefined);
+  }, [publisher, maxAge]);
   useEffect(() => {
     publisher.name.set(Net.Path.from(broadcastPath.trim() || DEFAULT_BROADCAST_PATH));
   }, [publisher, broadcastPath]);
@@ -309,20 +312,24 @@ function PublishForm({ publisher, params }: { publisher: Publisher; params: URLS
     opusFec,
     opusDtx,
   ]);
-  useEffect(() => publisher.audio.muted.set(muted), [publisher, muted]);
-  useEffect(() => publisher.audio.volume.set(optionalNumber(volume) ?? 1), [publisher, volume]);
+  // The encoder has no mute switch: muting is zero gain, which keeps the track and its catalog
+  // entry alive and sends silence.
   useEffect(() => {
-    publisher.audio.sampleRate.set(SAMPLE_RATES[sampleRate]?.hz);
+    publisher.audio.volume.set(muted ? 0 : (optionalNumber(volume) ?? 1));
+  }, [publisher, muted, volume]);
+  // Sample rate and channel count are capture format knobs, applied before the encoder.
+  useEffect(() => {
+    publisher.audioCapture.sampleRate.set(SAMPLE_RATES[sampleRate]?.hz);
   }, [publisher, sampleRate]);
   useEffect(() => {
-    publisher.audio.channelCount.set(CHANNEL_COUNTS[channelCount]?.channels);
+    publisher.audioCapture.channelCount.set(CHANNEL_COUNTS[channelCount]?.channels);
   }, [publisher, channelCount]);
 
   // ---- Read the package's state -------------------------------------------
   const running = useValue(publisher.running);
   const status = useValue(publisher.status);
   const error = useValue(publisher.error);
-  const announced = useValue(publisher.broadcast.net) !== undefined;
+  const announced = useValue(publisher.announcing);
   const cameras = useValue(publisher.camera.device.out.available) ?? [];
   const microphones = useValue(publisher.microphone.device.out.available) ?? [];
   const fileName = useValue(publisher.file.file)?.name;
@@ -402,8 +409,8 @@ function PublishForm({ publisher, params }: { publisher: Publisher; params: URLS
           />
           <NumberField
             label="Relay retention (ms)"
-            value={latencyMax}
-            onChange={setLatencyMax}
+            value={maxAge}
+            onChange={setMaxAge}
             placeholder="default"
           />
           <Checkbox label="Flip horizontally" checked={flip} onChange={setFlip} />
@@ -647,7 +654,7 @@ function StatusLine({
   hasAudio,
 }: {
   running: boolean;
-  status: Publish.Net.Connection.ReloadStatus;
+  status: Publish.Net.Connection.Status;
   announced: boolean;
   error: string | undefined;
   hasVideo: boolean;
@@ -688,7 +695,7 @@ interface Rates {
   audioBps: number;
 }
 
-/** Encoder output rates from the package's cumulative stats, sampled once a second. */
+/** Capture and encoder output rates from cumulative counters, sampled once a second. */
 function StatsLine({ publisher }: { publisher: Publisher }) {
   const resolved = useValue(publisher.video.out.resolved);
   const videoActive = useValue(publisher.video.out.active);
@@ -698,31 +705,27 @@ function StatsLine({ publisher }: { publisher: Publisher }) {
   const [rates, setRates] = useState<Rates | null>(null);
 
   useEffect(() => {
-    let captured = 0;
-    const unsubscribe = publisher.capture.out.frame.subscribe((frame) => {
-      if (frame) captured++;
+    const sample = () => ({
+      captured: publisher.capturedFrames,
+      video: publisher.video.out.stats.peek(),
+      audio: publisher.audio.out.stats.peek(),
     });
-    let prev = { video: publisher.video.out.stats.peek(), audio: publisher.audio.out.stats.peek() };
+    let prev = sample();
     let prevAt = performance.now();
     const id = setInterval(() => {
-      const video = publisher.video.out.stats.peek();
-      const audio = publisher.audio.out.stats.peek();
+      const next = sample();
       const now = performance.now();
       const secs = (now - prevAt) / 1000;
       setRates({
-        captureFps: captured / secs,
-        videoFps: (video.frames - prev.video.frames) / secs,
-        videoBps: ((video.bytes - prev.video.bytes) * 8) / secs,
-        audioBps: ((audio.bytes - prev.audio.bytes) * 8) / secs,
+        captureFps: (next.captured - prev.captured) / secs,
+        videoFps: (next.video.frames - prev.video.frames) / secs,
+        videoBps: ((next.video.bytes - prev.video.bytes) * 8) / secs,
+        audioBps: ((next.audio.bytes - prev.audio.bytes) * 8) / secs,
       });
-      captured = 0;
-      prev = { video, audio };
+      prev = next;
       prevAt = now;
     }, 1000);
-    return () => {
-      clearInterval(id);
-      unsubscribe();
-    };
+    return () => clearInterval(id);
   }, [publisher]);
 
   const parts: string[] = [];

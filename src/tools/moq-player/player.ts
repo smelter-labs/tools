@@ -1,15 +1,15 @@
-// Player graph composed from `@moq/watch` primitives only, the consume-side counterpart to
-// the MoQ Publish tool's publisher.ts. It mirrors what the package's `<moq-watch>` element wires up internally, minus the
-// DOM attribute plumbing, so the React form can drive it through signals.
+// Player built on `@moq/watch`'s headless `Player`, the consume-side counterpart to the MoQ
+// Publish tool's publisher.ts. `Watch.Player` is the pipeline the package's `<moq-watch>` element
+// drives, minus the DOM attribute plumbing, so the React form can drive it through signals.
 //
 // The pipeline lives as long as the tool page; only the relay connection is created per Start,
-// because `Reload`'s transport options are not reactive and giving up rejects a one-shot promise.
+// because a `Connection`'s transport options (WebSocket fallback, pinned cert) are not reactive.
 import * as Watch from "@moq/watch";
 import { Effect, Signal } from "@moq/signals";
 
 const Net = Watch.Net;
 
-export type Latency = Watch.Latency;
+export type Delay = Watch.Delay;
 
 export interface ConnectOptions {
   /** Relay URL. `http://` is the package's dev shorthand that fetches and pins the relay cert. */
@@ -28,115 +28,68 @@ export class Player {
   // ---- Controls -----------------------------------------------------------
   readonly name = new Signal<Watch.Net.Path.Valid>(Net.Path.empty());
   /** Wait for the relay to (re)announce the broadcast before subscribing. */
-  readonly reload = new Signal(true);
+  readonly announced = new Signal(true);
   readonly catalogFormat = new Signal<Watch.CatalogFormat | undefined>(undefined);
   readonly paused = new Signal(false);
   readonly muted = new Signal(false);
   readonly volume = new Signal(0.5);
-  readonly latency = new Signal<Latency>("real-time");
+  /** How far playback trails the live edge. `"instant"` also turns audio off. */
+  readonly delay = new Signal<Delay>("auto");
+  /** Future-dated media held beyond the live edge before skipping ahead; above zero is buffered playback. */
+  readonly buffer = new Signal<Watch.Net.Time.Milli>(Net.Time.Milli.zero);
   /** Rendition preference; the source picks the closest match. */
   readonly target = new Signal<Watch.Video.Target | undefined>(undefined);
   readonly canvas = new Signal<HTMLCanvasElement | undefined>(undefined);
 
   // ---- Pipeline -----------------------------------------------------------
+  readonly #pipeline: Watch.Player;
   readonly broadcast: Watch.Broadcast;
   readonly sync: Watch.Sync;
   readonly video: Watch.Video.Decoder;
   readonly audio: Watch.Audio.Decoder;
-  readonly renderer: Watch.Video.Renderer;
-  readonly emitter: Watch.Audio.Emitter;
 
   // ---- Connection ---------------------------------------------------------
   readonly running = new Signal(false);
-  readonly status = new Signal<Watch.Net.Connection.ReloadStatus>("disconnected");
+  readonly status = new Signal<Watch.Net.Connection.Status>("disconnected");
   readonly error = new Signal<string | undefined>(undefined);
   /** The peer's PROBE estimates for the live connection, if the relay sends them. */
   readonly probe = new Signal<Watch.Net.Connection.Probe | undefined>(undefined);
 
-  readonly #established = new Signal<Watch.Net.Connection.Established | undefined>(undefined);
-  #session?: { reload: Watch.Net.Connection.Reload; dispose: () => void };
+  readonly #origin = new Signal<Watch.Net.Origin.Table | undefined>(undefined);
+  readonly #connection = new Signal<Watch.Net.Connection | undefined>(undefined);
+  #session?: { connection: Watch.Net.Connection; dispose: () => void };
 
   constructor() {
-    const signals = this.#signals;
-
-    this.broadcast = new Watch.Broadcast({
-      connection: this.#established,
+    this.#pipeline = new Watch.Player({
+      origin: this.#origin,
+      probe: this.probe,
       enabled: this.running,
       name: this.name,
-      reload: this.reload,
+      announced: this.announced,
       catalogFormat: this.catalogFormat,
-    });
-
-    const videoSource = new Watch.Video.Source({
-      broadcast: this.broadcast,
-      target: this.target,
-      supported: Watch.Video.Decoder.supported,
-    });
-    const audioSource = new Watch.Audio.Source({
-      broadcast: this.broadcast,
-      supported: Watch.Audio.Decoder.supported,
-    });
-    signals.cleanup(() => {
-      videoSource.close();
-      audioSource.close();
-    });
-
-    // `Sync` cannot pace "instant" on its own: it gets a zero buffer, video is unpaced and audio
-    // is disabled below, exactly like the element does.
-    const paced = new Signal<Watch.Paced>("real-time");
-    const isPaced = new Signal(true);
-    signals.run((e) => {
-      const latency = e.get(this.latency);
-      paced.set(latency === "instant" ? Net.Time.Milli.zero : latency);
-      isPaced.set(latency !== "instant");
-    });
-
-    this.sync = new Watch.Sync({
-      latency: paced,
-      connection: this.#established,
-      video: videoSource.out.jitter,
-      audio: audioSource.out.jitter,
-    });
-
-    const videoEnabled = new Signal(false);
-    const audioEnabled = new Signal(false);
-    this.video = new Watch.Video.Decoder(videoSource, this.sync, {
-      enabled: videoEnabled,
-      paced: isPaced,
-    });
-    this.audio = new Watch.Audio.Decoder(audioSource, this.sync, { enabled: audioEnabled });
-
-    this.emitter = new Watch.Audio.Emitter(this.audio, {
-      volume: this.volume,
-      muted: this.muted,
-      paused: this.paused,
-    });
-    // Always download while the page is up: the canvas is the whole tool, so the element's
-    // viewport-distance heuristic would only add a way to stall.
-    this.renderer = new Watch.Video.Renderer(this.video, {
       canvas: this.canvas,
+      paused: this.paused,
+      muted: this.muted,
+      volume: this.volume,
+      delay: this.delay,
+      buffer: this.buffer,
+      target: this.target,
+      // Always download while the page is up: the canvas is the whole tool, so the element's
+      // viewport-distance heuristic would only add a way to stall.
       visible: "always",
     });
+    this.broadcast = this.#pipeline.broadcast;
+    this.sync = this.#pipeline.sync;
+    this.video = this.#pipeline.video;
+    this.audio = this.#pipeline.audio;
 
-    signals.run((e) => {
-      audioEnabled.set(e.get(this.emitter.out.enabled) && e.get(isPaced));
-    });
-    signals.run((e) => {
-      if (e.get(this.latency) === "instant") this.audio.reset();
-    });
-    // Paused keeps the last frame on screen: download only until the first frame lands.
-    signals.run((e) => {
-      const visible = e.get(this.renderer.out.visible);
-      if (!e.get(this.paused)) {
-        videoEnabled.set(visible);
-        return;
-      }
-      videoEnabled.set(visible && !e.get(this.renderer.out.frame));
-    });
-
-    signals.run((e) => {
-      const connection = e.get(this.#established);
-      this.probe.set(connection && e.get(connection.probe));
+    // Mirror the live connection's origin, probe and status; each resets once it is dropped.
+    this.#signals.run((e) => {
+      const connection = e.get(this.#connection);
+      if (!connection) return;
+      e.run((inner) => inner.set(this.#origin, inner.get(connection.origin), undefined));
+      e.run((inner) => inner.set(this.probe, inner.get(connection.probe), undefined));
+      e.run((inner) => inner.set(this.status, inner.get(connection.status), "disconnected"));
     });
   }
 
@@ -152,35 +105,31 @@ export class Player {
     }
     if (opts.token) url.searchParams.set("jwt", opts.token);
 
+    // Transport options give this handle its own reconnect loop instead of the page-wide pool.
+    // It gives up, via `error`, on an auth rejection or once its retry window (10 s by default)
+    // passes without a connection.
     const certHash = opts.certHash?.replace(/[:\s]/g, "");
-    const reload = new Net.Connection.Reload({
+    const connection = new Net.Connection({
       url,
-      enabled: true,
       websocket: { enabled: opts.wsFallback },
       webtransport: certHash ? { serverCertificateHashes: [{ value: certHash }] } : undefined,
     });
 
-    const unsubscribe = [
-      reload.established.watch((connection) => this.#established.set(connection)),
-      reload.status.watch((status) => this.status.set(status)),
-    ];
-    const session = {
-      reload,
-      dispose: () => {
-        for (const dispose of unsubscribe) dispose();
-        reload.close();
-      },
-    };
-    this.#session = session;
-    this.error.set(undefined);
-    this.running.set(true);
-
-    // `closed` rejects when the reconnect loop gives up.
-    reload.closed.catch((err: unknown) => {
-      if (this.#session !== session) return;
+    const unsubscribe = connection.error.subscribe((err) => {
+      if (!err || this.#session?.connection !== connection) return;
       this.error.set(errorMessage(err));
       this.stop();
     });
+    this.#session = {
+      connection,
+      dispose: () => {
+        unsubscribe();
+        connection.close();
+      },
+    };
+    this.#connection.set(connection);
+    this.error.set(undefined);
+    this.running.set(true);
   }
 
   /** Disconnect from the relay. The last frame stays on the canvas. */
@@ -189,26 +138,19 @@ export class Player {
     if (!session) return;
     this.#session = undefined;
     session.dispose();
-    this.#established.set(undefined);
-    this.status.set("disconnected");
+    this.#connection.set(undefined);
     this.running.set(false);
   }
 
   /** Re-anchor playback in buffered mode: reset the clock and flush the audio buffer. */
   reset() {
-    this.sync.reset();
-    this.audio.reset();
+    this.#pipeline.reset();
   }
 
   /** Stop everything and tear the pipeline down. */
   close() {
     this.stop();
-    this.emitter.close();
-    this.renderer.close();
-    this.video.close();
-    this.audio.close();
-    this.sync.close();
-    this.broadcast.close();
+    this.#pipeline.close();
     this.#signals.close();
   }
 }

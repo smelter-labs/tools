@@ -13,10 +13,6 @@ A collection of browser-based utilities for working with [Smelter](https://githu
 - **MoQ Player** — Play a MoQ broadcast from a relay using the `@moq/watch` library.
 - **WAV Inspector** — Inspect WAV files and compare waveforms sample-by-sample.
 
-There is also a **MoQ Streamer** (`#moq-streamer`), a low-level publisher that encodes H264 + AAC with
-WebCodecs and pushes CMAF over Media-over-QUIC directly. It is not listed on the landing page but the
-route still works.
-
 ## URLs and query parameters
 
 Each tool lives under a hash route, e.g. `https://smelter-labs.github.io/tools/#whep-player`.
@@ -34,7 +30,6 @@ Connection details can be prefilled with query parameters after the hash:
 | WHEP Player   | `#whep-player`   | `url`, `token`                 |
 | MoQ Publish   | `#moq-publish`   | `url`, `token`, `path`, `cert` |
 | MoQ Player    | `#moq-player`    | `url`, `path`, `jwt`, `cert`   |
-| MoQ Streamer  | `#moq-streamer`  | `url`, `token`, `path`, `cert` |
 | WAV Inspector | `#wav-inspector` | —                              |
 
 Values you type into a tool are kept in `sessionStorage` and take precedence over query parameters

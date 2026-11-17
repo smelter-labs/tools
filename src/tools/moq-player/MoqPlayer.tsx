@@ -15,7 +15,7 @@ import {
   optionalNumber,
 } from "../../ui/form.tsx";
 import { formatBitrate } from "../../ui/format.ts";
-import { Player, type Latency } from "./player.ts";
+import { Player, type Delay } from "./player.ts";
 import type { ToolMeta } from "../registry.ts";
 
 const Net = Watch.Net;
@@ -24,11 +24,11 @@ const Net = Watch.Net;
 // publishers' default.
 const DEFAULT_BROADCAST_PATH = "test";
 
-type LatencyMode = "real-time" | "instant" | "fixed" | "range";
+type LatencyMode = "auto" | "instant" | "fixed" | "buffered";
 const LATENCY_MODES: { value: LatencyMode; label: string }[] = [
-  { value: "real-time", label: "Real-time (adapts to RTT)" },
-  { value: "fixed", label: "Fixed jitter buffer" },
-  { value: "range", label: "Range (buffered playback)" },
+  { value: "auto", label: "Auto (adapts to RTT)" },
+  { value: "fixed", label: "Fixed delay" },
+  { value: "buffered", label: "Buffered playback" },
   { value: "instant", label: "Instant (paint on decode, no audio)" },
 ];
 
@@ -39,9 +39,10 @@ const CATALOG_FORMATS: { value: string; label: string }[] = [
 
 const AUTO = "auto";
 
-function bound(raw: string): Watch.Bound {
+/** A delay field: empty means "auto", which sizes the jitter buffer from the RTT. */
+function parseDelay(raw: string): Delay {
   const ms = optionalNumber(raw);
-  return ms === undefined ? "real-time" : Net.Time.Milli(ms);
+  return ms === undefined ? "auto" : Net.Time.Milli(ms);
 }
 
 export const meta: ToolMeta = {
@@ -83,10 +84,10 @@ function PlayerForm({ player, params }: { player: Player; params: URLSearchParam
   const [catalogFormat, setCatalogFormat] = useState(AUTO);
 
   // ---- Playback -----------------------------------------------------------
-  const [latencyMode, setLatencyMode] = useState<LatencyMode>("real-time");
-  const [latencyMs, setLatencyMs] = useState("100");
-  const [latencyMin, setLatencyMin] = useState("");
-  const [latencyMax, setLatencyMax] = useState("");
+  const [latencyMode, setLatencyMode] = useState<LatencyMode>("auto");
+  const [fixedDelayMs, setFixedDelayMs] = useState("100");
+  const [bufferedDelayMs, setBufferedDelayMs] = useState("");
+  const [bufferMs, setBufferMs] = useState("");
   const [rendition, setRendition] = useState(AUTO);
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -96,29 +97,28 @@ function PlayerForm({ player, params }: { player: Player; params: URLSearchParam
   useEffect(() => {
     player.name.set(Net.Path.from(broadcastPath.trim() || DEFAULT_BROADCAST_PATH));
   }, [player, broadcastPath]);
-  useEffect(() => player.reload.set(waitForAnnounce), [player, waitForAnnounce]);
+  useEffect(() => player.announced.set(waitForAnnounce), [player, waitForAnnounce]);
   useEffect(() => {
-    player.catalogFormat.set(
-      catalogFormat === AUTO ? undefined : Watch.parseCatalogFormat(catalogFormat),
-    );
+    player.catalogFormat.set(Watch.CATALOG_FORMATS.find((f) => f === catalogFormat));
   }, [player, catalogFormat]);
   useEffect(() => {
-    let latency: Latency;
+    let playbackDelay: Delay = "auto";
+    let buffer = Net.Time.Milli.zero;
     switch (latencyMode) {
       case "instant":
-        latency = "instant";
+        playbackDelay = "instant";
         break;
       case "fixed":
-        latency = bound(latencyMs);
+        playbackDelay = parseDelay(fixedDelayMs);
         break;
-      case "range":
-        latency = Watch.latencyFromBounds(bound(latencyMin), bound(latencyMax));
+      case "buffered":
+        playbackDelay = parseDelay(bufferedDelayMs);
+        buffer = Net.Time.Milli(Math.max(0, optionalNumber(bufferMs) ?? 0));
         break;
-      default:
-        latency = "real-time";
     }
-    player.latency.set(latency);
-  }, [player, latencyMode, latencyMs, latencyMin, latencyMax]);
+    player.delay.set(playbackDelay);
+    player.buffer.set(buffer);
+  }, [player, latencyMode, fixedDelayMs, bufferedDelayMs, bufferMs]);
   useEffect(() => {
     player.target.set(rendition === AUTO ? undefined : { name: rendition });
   }, [player, rendition]);
@@ -229,25 +229,25 @@ function PlayerForm({ player, params }: { player: Player; params: URLSearchParam
           />
           {latencyMode === "fixed" && (
             <NumberField
-              label="Jitter buffer (ms)"
-              value={latencyMs}
-              onChange={setLatencyMs}
-              placeholder="real-time"
+              label="Delay (ms)"
+              value={fixedDelayMs}
+              onChange={setFixedDelayMs}
+              placeholder="auto"
             />
           )}
-          {latencyMode === "range" && (
+          {latencyMode === "buffered" && (
             <>
               <NumberField
-                label="Min (ms)"
-                value={latencyMin}
-                onChange={setLatencyMin}
-                placeholder="real-time"
+                label="Delay (ms)"
+                value={bufferedDelayMs}
+                onChange={setBufferedDelayMs}
+                placeholder="auto"
               />
               <NumberField
-                label="Max (ms)"
-                value={latencyMax}
-                onChange={setLatencyMax}
-                placeholder="real-time"
+                label="Buffer ahead (ms)"
+                value={bufferMs}
+                onChange={setBufferMs}
+                placeholder="0"
               />
             </>
           )}
@@ -298,7 +298,7 @@ function PlayerForm({ player, params }: { player: Player; params: URLSearchParam
             Stop
           </button>
         )}
-        {latencyMode === "range" && (
+        {latencyMode === "buffered" && (
           <button onClick={() => player.reset()} style={buttonStyle} disabled={!running}>
             Reset clock
           </button>
@@ -344,7 +344,7 @@ function StatusLine({
   hasAudio,
 }: {
   running: boolean;
-  status: Watch.Net.Connection.ReloadStatus;
+  status: Watch.Net.Connection.Status;
   broadcast: "offline" | "loading" | "live";
   error: string | undefined;
   videoError: Watch.Video.SourceError | undefined;
@@ -399,7 +399,7 @@ function StatsLine({ player }: { player: Player }) {
   const display = useValue(player.video.out.display);
   const videoStalled = useValue(player.video.out.stalled);
   const audioStalled = useValue(player.audio.out.stalled);
-  const buffer = useValue(player.sync.out.buffer);
+  const delay = useValue(player.sync.out.delay);
   const jitter = useValue(player.sync.out.jitter);
   const probe = useValue(player.probe);
   const [rates, setRates] = useState<Rates | null>(null);
@@ -444,7 +444,7 @@ function StatsLine({ player }: { player: Player }) {
     );
   }
   if (videoConfig || audioConfig) {
-    parts.push(`Buffer ${buffer.toFixed(0)} ms (jitter ${jitter.toFixed(0)} ms)`);
+    parts.push(`Delay ${delay.toFixed(0)} ms (jitter ${jitter.toFixed(0)} ms)`);
   }
   if (probe?.rtt !== undefined) parts.push(`RTT ${probe.rtt.toFixed(0)} ms`);
   if (probe?.estimatedRecvRate !== undefined) {

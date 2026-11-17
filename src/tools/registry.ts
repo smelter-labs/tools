@@ -4,7 +4,6 @@ import type { ComponentType } from "react";
 import SmelterStats, { meta as smelterStats } from "./smelter-stats/SmelterStats.tsx";
 import WhipStreamer, { meta as whipStreamer } from "./whip-streamer/WhipStreamer.tsx";
 import WhepPlayer, { meta as whepPlayer } from "./whep-player/WhepPlayer.tsx";
-import MoqStreamer, { meta as moqStreamer } from "./moq-streamer/MoqStreamer.tsx";
 import MoqPublish, { meta as moqPublish } from "./moq-publish/MoqPublish.tsx";
 import MoqPlayer, { meta as moqPlayer } from "./moq-player/MoqPlayer.tsx";
 import WavInspector, { meta as wavInspector } from "./wav-inspector/WavInspector.tsx";
@@ -29,7 +28,6 @@ export const TOOLS: Tool[] = [
   { ...smelterStats, component: SmelterStats },
   { ...whipStreamer, component: WhipStreamer },
   { ...whepPlayer, component: WhepPlayer },
-  { ...moqStreamer, component: MoqStreamer, hidden: true },
   { ...moqPublish, component: MoqPublish },
   { ...moqPlayer, component: MoqPlayer },
   { ...wavInspector, component: WavInspector },
